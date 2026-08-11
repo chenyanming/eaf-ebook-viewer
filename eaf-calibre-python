@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Launch EAF through calibre-debug while preserving EAF dependencies."""
+
+import json
+import os
+import site
+import sys
+
+
+def main():
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    calibre_debug = os.environ.get(
+        "EAF_CALIBRE_DEBUG",
+        "/Applications/calibre.app/Contents/MacOS/calibre-debug",
+    )
+    if not os.path.isfile(calibre_debug):
+        raise SystemExit(
+            "calibre-debug was not found at {}. Set EAF_CALIBRE_DEBUG.".format(
+                calibre_debug
+            )
+        )
+
+    environment = os.environ.copy()
+    dependency_paths = list(sys.path)
+    user_site = site.getusersitepackages()
+    if user_site not in dependency_paths:
+        dependency_paths.append(user_site)
+    environment["EAF_SYSTEM_PYTHON_PATHS"] = json.dumps(dependency_paths)
+
+    bootstrap = os.path.join(app_dir, "eaf_calibre_bootstrap.py")
+    argv = [calibre_debug, "-e", bootstrap, "--", *sys.argv[1:]]
+    os.execve(calibre_debug, argv, environment)
+
+
+if __name__ == "__main__":
+    main()
