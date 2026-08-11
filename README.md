@@ -23,11 +23,8 @@ Add the application directory and configuration to Emacs:
 (eaf-ebook-viewer-use-calibre-runtime)
 ```
 
-On Linux, point the launcher to `calibre-debug` before EAF starts:
-
-```Elisp
-(setenv "EAF_CALIBRE_DEBUG" (executable-find "calibre-debug"))
-```
+The launcher automatically finds `calibre-debug` from `PATH` on Linux and
+other platforms, or from the standard Calibre.app location on macOS.
 
 Open a supported ebook with `find-file` or `eaf-open`.
 

@@ -3,22 +3,36 @@
 
 import json
 import os
+import shutil
 import site
 import sys
 
 
+def find_calibre_debug():
+    """Return calibre-debug from PATH or a standard calibre installation."""
+    candidates = (
+        shutil.which("calibre-debug"),
+        "/Applications/calibre.app/Contents/MacOS/calibre-debug",
+        os.path.expanduser(
+            "~/Applications/calibre.app/Contents/MacOS/calibre-debug"
+        ),
+    )
+    for candidate in candidates:
+        if (
+            candidate
+            and os.path.isfile(candidate)
+            and os.access(candidate, os.X_OK)
+        ):
+            return candidate
+    raise SystemExit(
+        "calibre-debug was not found. Install calibre and ensure "
+        "calibre-debug is available in PATH."
+    )
+
+
 def main():
     app_dir = os.path.dirname(os.path.abspath(__file__))
-    calibre_debug = os.environ.get(
-        "EAF_CALIBRE_DEBUG",
-        "/Applications/calibre.app/Contents/MacOS/calibre-debug",
-    )
-    if not os.path.isfile(calibre_debug):
-        raise SystemExit(
-            "calibre-debug was not found at {}. Set EAF_CALIBRE_DEBUG.".format(
-                calibre_debug
-            )
-        )
+    calibre_debug = find_calibre_debug()
 
     environment = os.environ.copy()
     dependency_paths = list(sys.path)
