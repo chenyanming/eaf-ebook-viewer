@@ -5,9 +5,8 @@
 
 ;;; Commentary:
 
-;; Embed calibre's Qt E-book Viewer in EAF.  The Python side must run inside
-;; calibre's bundled Python runtime; `eaf-ebook-viewer-python-command' points
-;; at the small launcher shipped with this application.
+;; Embed calibre's Qt E-book Viewer in EAF.  Calibre's Python source is
+;; vendored with this application and runs in EAF's ordinary Python process.
 
 ;;; Code:
 
@@ -107,19 +106,17 @@
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing the EAF E-book Viewer application.")
 
-(defcustom eaf-ebook-viewer-python-command
-  (expand-file-name "eaf-calibre-python" eaf-ebook-viewer--directory)
-  "Launcher that runs the EAF backend in calibre's Python runtime."
-  :type 'file
-  :group 'eaf-ebook-viewer)
+(defun eaf-ebook-viewer--add-python-path ()
+  "Expose the app bootstrap to EAF's unchanged Python process."
+  (let* ((old (getenv "PYTHONPATH"))
+         (paths (and old (split-string old path-separator t))))
+    (unless (member eaf-ebook-viewer--directory paths)
+      (setenv "PYTHONPATH"
+              (mapconcat #'identity
+                         (cons eaf-ebook-viewer--directory paths)
+                         path-separator)))))
 
-(defun eaf-ebook-viewer-use-calibre-runtime ()
-  "Configure EAF to use calibre's bundled Python and Qt runtime.
-
-Call this before the EAF Python process starts.  If EAF is already running,
-use `eaf-restart-process' after changing the command."
-  (interactive)
-  (setq eaf-python-command eaf-ebook-viewer-python-command))
+(eaf-ebook-viewer--add-python-path)
 
 (add-to-list 'eaf-app-binding-alist
              '("ebook-viewer" . eaf-ebook-viewer-keybinding))

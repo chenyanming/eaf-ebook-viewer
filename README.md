@@ -6,11 +6,23 @@ It supports EPUB, MOBI, AZW3, FB2 and other formats supported by calibre. Books 
 
 ### Load application
 
-Install [EAF](https://github.com/emacs-eaf/emacs-application-framework#install) and [calibre](https://calibre-ebook.com/download) first, then clone this repository into EAF's `app` directory:
+Install [EAF](https://github.com/emacs-eaf/emacs-application-framework#install), then install this app with EAF's installer.
+
+On macOS, install the compiler dependency first:
 
 ```Shell
-git clone https://github.com/chenyanming/eaf-ebook-viewer.git \
+brew install icu4c
+```
+
+On Linux, EAF installs the compiler and ICU development packages listed in
+`dependencies.json` for Debian/Ubuntu, Fedora and Arch Linux. On other
+distributions, install a C/C++ compiler and the ICU development package first.
+
+```Shell
+git clone --recurse-submodules https://github.com/chenyanming/eaf-ebook-viewer.git \
   ~/.emacs.d/site-lisp/emacs-application-framework/app/ebook-viewer
+cd ~/.emacs.d/site-lisp/emacs-application-framework
+./install-eaf.py --install ebook-viewer --force
 ```
 
 Add the application directory and configuration to Emacs:
@@ -20,11 +32,11 @@ Add the application directory and configuration to Emacs:
              "~/.emacs.d/site-lisp/emacs-application-framework/app/ebook-viewer")
 (require 'eaf)
 (require 'eaf-ebook-viewer)
-(eaf-ebook-viewer-use-calibre-runtime)
 ```
 
-The launcher automatically finds `calibre-debug` from `PATH` on Linux and
-other platforms, or from the standard Calibre.app location on macOS.
+On macOS and Linux, the app builds its vendored Calibre 8.7 runtime for EAF's
+Python. It does not require Calibre to be installed and does not launch
+`calibre-debug`. Conversion workers use the same Python as EAF.
 
 Open a supported ebook with `find-file` or `eaf-open`.
 

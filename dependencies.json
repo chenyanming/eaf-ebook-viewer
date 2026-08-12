@@ -1,0 +1,64 @@
+{
+  "brew": [
+    "icu4c"
+  ],
+  "apt": [
+    "build-essential",
+    "libicu-dev"
+  ],
+  "dnf": [
+    "gcc",
+    "gcc-c++",
+    "libicu-devel"
+  ],
+  "pacman": [
+    "base-devel",
+    "icu"
+  ],
+  "pip": {
+    "darwin": [
+      "apsw",
+      "beautifulsoup4",
+      "css-parser",
+      "dnspython",
+      "feedparser",
+      "fonttools",
+      "html2text",
+      "html5-parser",
+      "--no-binary=lxml",
+      "lxml",
+      "mechanize",
+      "msgpack",
+      "netifaces",
+      "psutil",
+      "py7zr",
+      "pygments",
+      "python-dateutil",
+      "xxhash",
+      "zeroconf",
+      "./app/ebook-viewer"
+    ],
+    "linux": [
+      "apsw",
+      "beautifulsoup4",
+      "css-parser",
+      "dnspython",
+      "feedparser",
+      "fonttools",
+      "html2text",
+      "html5-parser",
+      "--no-binary=lxml",
+      "lxml",
+      "mechanize",
+      "msgpack",
+      "netifaces",
+      "psutil",
+      "py7zr",
+      "pygments",
+      "python-dateutil",
+      "xxhash",
+      "zeroconf",
+      "./app/ebook-viewer"
+    ]
+  }
+}

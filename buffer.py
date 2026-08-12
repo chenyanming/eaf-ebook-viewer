@@ -12,9 +12,11 @@ import hashlib
 import os
 import platform
 import shutil
+import sys
 import tempfile
 import traceback
 import zipfile
+from uuid import uuid4
 
 from PyQt6.QtCore import QEvent, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
@@ -26,6 +28,12 @@ from core.utils import (
     interactive,
     message_to_emacs,
 )
+
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+
+from calibre_bootstrap import initialize as initialize_calibre
 
 
 _PROFILE_HANDLERS = {}
@@ -322,7 +330,10 @@ def _install_isolated_profile_factory(web_view_module):
                 self.fail_request(request)
 
     def create_isolated_profile():
-        profile = setup_profile(QWebEngineProfile(QApplication.instance()))
+        profile_name = "eaf-ebook-{}".format(uuid4())
+        profile = setup_profile(
+            QWebEngineProfile(profile_name, QApplication.instance())
+        )
         os_name = "windows" if platform.system() == "Windows" else (
             "macos" if platform.system() == "Darwin" else "linux"
         )
@@ -336,7 +347,12 @@ def _install_isolated_profile_factory(web_view_module):
         viewer_js = resource_path(
             "viewer.js", data=True, allow_user_override=False
         )
-        translations = get_translations_data() or b"null"
+        try:
+            translations = get_translations_data() or b"null"
+        except FileNotFoundError:
+            # Raw Calibre source does not contain the release translation
+            # archive.  The viewer supports an untranslated null catalog.
+            translations = b"null"
         viewer_js = viewer_js.replace(b"__TRANSLATIONS_DATA__", translations, 1)
         if in_develop_mode:
             viewer_js = viewer_js.replace(b"__IN_DEVELOP_MODE__", b"1")
@@ -376,12 +392,10 @@ class AppBuffer(Buffer):
 
     def _create_viewer(self, url):
         book_path = _stage_book(url)
+        initialize_calibre()
         app = QApplication.instance()
-        if app is None or not hasattr(app, "palette_changed"):
-            raise RuntimeError(
-                "EAF is not running in calibre's Python runtime. "
-                "Set eaf-python-command to eaf-calibre-python and restart EAF."
-            )
+        if app is None:
+            raise RuntimeError("EAF did not create a QApplication")
 
         from calibre.gui2.viewer import get_boss, get_current_book_data
         from calibre.gui2.viewer.convert_book import initialize_worker
