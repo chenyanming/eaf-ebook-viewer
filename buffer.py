@@ -130,12 +130,10 @@ def _stage_book(path):
             "XDG_CACHE_HOME", os.path.expanduser("~/.cache")
         )
     cache_dir = os.path.join(
-        cache_root, "eaf-ebook-viewer", "books", cache_key[:2]
+        cache_root, "eaf-ebook-viewer", "books", cache_key
     )
     os.makedirs(cache_dir, exist_ok=True)
-    cached_path = os.path.join(
-        cache_dir, cache_key + extension
-    )
+    cached_path = os.path.join(cache_dir, os.path.basename(source))
 
     if os.path.isfile(cached_path):
         try:

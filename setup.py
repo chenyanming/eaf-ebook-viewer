@@ -104,6 +104,29 @@ def install_resources():
         viewer_html.write_text(html, encoding="utf-8")
 
 
+def build_calibre_metadata_resources(env):
+    resources = CALIBRE / "resources" / "localization"
+    required = (
+        resources / "iso639.calibre_msgpack",
+        resources / "iso3166.calibre_msgpack",
+    )
+    if not all(path.exists() for path in required):
+        code = (
+            "import os, runpy, sys; "
+            "from calibre_bootstrap import initialize; initialize(); "
+            "os.chdir(sys.argv[1]); "
+            "sys.argv = ['setup.py', sys.argv[2]]; "
+            "runpy.run_path('setup.py', run_name='__main__')"
+        )
+        for command, output in zip(("iso639", "iso3166"), required):
+            if not output.exists():
+                subprocess.check_call(
+                    (sys.executable, "-c", code, str(CALIBRE), command),
+                    cwd=ROOT,
+                    env=env,
+                )
+
+
 def build_calibre():
     if not (CALIBRE / "setup.py").exists():
         raise RuntimeError("Clone Ebook Viewer with --recurse-submodules")
@@ -122,6 +145,7 @@ def build_calibre():
                 cwd=CALIBRE,
                 env=env,
             )
+    build_calibre_metadata_resources(env)
     compile_forms()
     install_resources()
 
