@@ -4,16 +4,23 @@
   ],
   "apt": [
     "build-essential",
-    "libicu-dev"
+    "libicu-dev",
+    "libxml2-dev",
+    "libxslt1-dev",
+    "pyqt6-dev-tools"
   ],
   "dnf": [
     "gcc",
     "gcc-c++",
-    "libicu-devel"
+    "libicu-devel",
+    "libxml2-devel",
+    "libxslt-devel"
   ],
   "pacman": [
     "base-devel",
-    "icu"
+    "icu",
+    "libxml2",
+    "libxslt"
   ],
   "pip": {
     "darwin": [
@@ -25,15 +32,20 @@
       "fonttools",
       "html2text",
       "html5-parser",
+      "chardet",
       "--no-binary=lxml",
-      "lxml",
+      "lxml==5.2.1",
+      "markdown",
       "mechanize",
       "msgpack",
       "netifaces",
+      "pillow",
       "psutil",
       "py7zr",
+      "pycryptodome",
       "pygments",
       "python-dateutil",
+      "regex",
       "xxhash",
       "zeroconf",
       "./app/ebook-viewer"
@@ -47,15 +59,21 @@
       "fonttools",
       "html2text",
       "html5-parser",
+      "chardet",
+      "jeepney",
       "--no-binary=lxml",
-      "lxml",
+      "lxml==5.2.1",
+      "markdown",
       "mechanize",
       "msgpack",
       "netifaces",
+      "pillow",
       "psutil",
       "py7zr",
+      "pycryptodome",
       "pygments",
       "python-dateutil",
+      "regex",
       "xxhash",
       "zeroconf",
       "./app/ebook-viewer"

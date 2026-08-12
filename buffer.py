@@ -119,9 +119,18 @@ def _stage_book(path):
         (source, str(source_stat.st_size), str(source_stat.st_mtime_ns))
     ).encode("utf-8")
     cache_key = hashlib.sha256(fingerprint).hexdigest()
+    if platform.system() == "Darwin":
+        cache_root = os.path.expanduser("~/Library/Caches")
+    elif platform.system() == "Windows":
+        cache_root = os.environ.get(
+            "LOCALAPPDATA", os.path.expanduser("~/.cache")
+        )
+    else:
+        cache_root = os.environ.get(
+            "XDG_CACHE_HOME", os.path.expanduser("~/.cache")
+        )
     cache_dir = os.path.join(
-        os.path.expanduser("~/Library/Caches/eaf-ebook-viewer/books"),
-        cache_key[:2],
+        cache_root, "eaf-ebook-viewer", "books", cache_key[:2]
     )
     os.makedirs(cache_dir, exist_ok=True)
     cached_path = os.path.join(

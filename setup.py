@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from xml.etree import ElementTree
 
 from setuptools import setup
 from setuptools.command.build import build
@@ -54,6 +55,7 @@ def build_environment():
 def compile_forms():
     env = os.environ.copy()
     env.pop("PYTHONNOUSERSITE", None)
+    env.pop("PYTHONPATH", None)
     code = (
         "from PyQt6.uic import compileUi; import sys; "
         "f=open(sys.argv[2], 'w', encoding='utf-8'); "
@@ -75,6 +77,31 @@ def install_resources():
             if not source.exists():
                 raise RuntimeError("generated/{} is missing".format(name))
             target.write_bytes(source.read_bytes())
+
+    viewer_html = CALIBRE / "resources" / "viewer.html"
+    if not viewer_html.exists():
+        svg_namespace = "http://www.w3.org/2000/svg"
+        xlink_namespace = "http://www.w3.org/1999/xlink"
+        ElementTree.register_namespace("", svg_namespace)
+        ElementTree.register_namespace("xlink", xlink_namespace)
+        icons = ElementTree.Element(
+            "{{{}}}svg".format(svg_namespace), {"style": "display:none"}
+        )
+        for path in sorted((CALIBRE / "imgsrc" / "srv").glob("*.svg")):
+            source = ElementTree.parse(path).getroot()
+            symbol = ElementTree.SubElement(
+                icons,
+                "{{{}}}symbol".format(svg_namespace),
+                {"id": "icon-" + path.stem, "viewBox": source.get("viewBox", "")},
+            )
+            symbol.extend(list(source))
+        reset = (
+            CALIBRE / "resources" / "content-server" / "reset.css"
+        ).read_text(encoding="utf-8")
+        html = "<!DOCTYPE html>\n<html><head><style>{}</style></head><body>{}</body></html>".format(
+            reset, ElementTree.tostring(icons, encoding="unicode")
+        )
+        viewer_html.write_text(html, encoding="utf-8")
 
 
 def build_calibre():

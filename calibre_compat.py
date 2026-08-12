@@ -83,7 +83,8 @@ class SpinAnimator(QWidget):
 
 
 def set_no_activate_on_click(widget):
-    widget.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+    if sys.platform == "darwin":
+        widget.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
 
 
 def set_menu_on_action(action, menu):
