@@ -9,20 +9,26 @@ Buffer and gives every book an isolated WebEngine profile/content handler.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
 import zipfile
 from uuid import uuid4
 
-from PyQt6.QtCore import QEvent, QTimer
+from PyQt6.QtCore import QEvent, QFile, QIODevice, QTimer, pyqtSlot
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWebChannel import QWebChannel
+from PyQt6.QtWebEngineCore import QWebEngineScript
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 from core.buffer import Buffer
 from core.utils import (
+    PostGui,
     eval_in_emacs,
     focus_emacs_buffer,
     interactive,
@@ -38,6 +44,16 @@ from calibre_bootstrap import initialize as initialize_calibre
 
 _PROFILE_HANDLERS = {}
 _ZIP_EBOOK_EXTENSIONS = {".epub", ".fbz", ".htmlz", ".txtz"}
+
+
+def _qt_webchannel_script():
+    resource = QFile(":/qtwebchannel/qwebchannel.js")
+    if not resource.open(QIODevice.OpenModeFlag.ReadOnly):
+        raise RuntimeError("Qt WebChannel JavaScript resource is unavailable")
+    try:
+        return bytes(resource.readAll()).decode("utf-8")
+    finally:
+        resource.close()
 
 
 def _activate_emacs_after_mouse_release():
@@ -110,11 +126,52 @@ def _validate_zip_ebook(path, extension=None):
         ) from error
 
 
+def _validate_staged_book(path, expected_size, extension):
+    """Validate every staged format, with deeper checks for ZIP containers."""
+    actual_size = os.path.getsize(path)
+    if expected_size <= 0 or actual_size <= 0 or actual_size != expected_size:
+        raise RuntimeError(
+            "The e-book is not fully downloaded: expected {} bytes, got {}. "
+            "Source: {}".format(expected_size, actual_size, path)
+        )
+    _validate_zip_ebook(path, extension)
+
+
+def _copy_cloud_file(source, destination):
+    """Copy SOURCE completely, allowing macOS File Provider to materialize it."""
+    if platform.system() == "Darwin":
+        result = subprocess.run(
+            ["/bin/cp", source, destination],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                "Could not download the cloud e-book ({}): {}".format(
+                    result.stderr.strip() or "cp failed", source
+                )
+            )
+        return
+    with open(source, "rb") as cloud_file, open(destination, "wb") as output:
+        shutil.copyfileobj(cloud_file, output, length=4 * 1024 * 1024)
+        output.flush()
+        os.fsync(output.fileno())
+
+
 def _stage_book(path):
-    """Copy a book into a read-only local cache before calibre sees it."""
+    """Materialize cloud books; pass ordinary local books through unchanged."""
     source = os.path.abspath(path)
     source_stat = os.stat(source)
     extension = os.path.splitext(source)[1].lower()
+
+    if not _is_cloud_storage_path(source):
+        if source_stat.st_size <= 0:
+            raise RuntimeError("The e-book is empty: {}".format(source))
+        _validate_zip_ebook(source, extension)
+        return source
+
     fingerprint = "\0".join(
         (source, str(source_stat.st_size), str(source_stat.st_mtime_ns))
     ).encode("utf-8")
@@ -137,7 +194,9 @@ def _stage_book(path):
 
     if os.path.isfile(cached_path):
         try:
-            _validate_zip_ebook(cached_path)
+            _validate_staged_book(
+                cached_path, source_stat.st_size, extension
+            )
             os.chmod(cached_path, 0o444)
             return cached_path
         except RuntimeError:
@@ -145,19 +204,13 @@ def _stage_book(path):
             # atomically after copying into a separate temporary file.
             pass
 
-    if _is_cloud_storage_path(source):
-        message_to_emacs("Downloading cloud e-book to the local EAF cache...")
-    else:
-        message_to_emacs("Preparing a read-only local copy for EAF...")
+    message_to_emacs("Downloading cloud e-book to the local EAF cache...")
     descriptor, temporary_path = tempfile.mkstemp(
         prefix=cache_key + ".", suffix=".download", dir=cache_dir
     )
+    os.close(descriptor)
     try:
-        with os.fdopen(descriptor, "wb") as destination:
-            with open(source, "rb") as cloud_file:
-                shutil.copyfileobj(cloud_file, destination, length=4 * 1024 * 1024)
-            destination.flush()
-            os.fsync(destination.fileno())
+        _copy_cloud_file(source, temporary_path)
 
         final_stat = os.stat(source)
         if (
@@ -168,13 +221,7 @@ def _stage_book(path):
                 "Google Drive changed the e-book while it was downloading. "
                 "Wait for sync to finish, then reopen it: {}".format(source)
             )
-        if os.path.getsize(temporary_path) != source_stat.st_size:
-            raise RuntimeError(
-                "Google Drive returned only part of the e-book. In Finder, "
-                "choose Download Now and reopen it: {}".format(source)
-            )
-
-        _validate_zip_ebook(temporary_path, extension)
+        _validate_staged_book(temporary_path, source_stat.st_size, extension)
         os.replace(temporary_path, cached_path)
         os.chmod(cached_path, 0o444)
         return cached_path
@@ -364,6 +411,21 @@ def _install_isolated_profile_factory(web_view_module):
         if in_develop_mode:
             viewer_js = viewer_js.replace(b"__IN_DEVELOP_MODE__", b"1")
         insert_scripts(profile, create_script("viewer.js", viewer_js))
+        insert_scripts(
+            profile,
+            create_script(
+                "qwebchannel.js",
+                _qt_webchannel_script(),
+                injection_point=QWebEngineScript.InjectionPoint.DocumentCreation,
+            ),
+            create_script(
+                "eaf-selection-context.js",
+                open(
+                    os.path.join(_APP_DIR, "selection_context.js"),
+                    encoding="utf-8",
+                ).read(),
+            ),
+        )
 
         handler = IsolatedBookHandler(profile)
         profile.installUrlSchemeHandler(
@@ -387,7 +449,11 @@ class AppBuffer(Buffer):
         super().__init__(buffer_id, url, arguments, False)
         self.viewer = None
         self.book_handler = None
-        self._last_selected_text = ""
+        try:
+            options = json.loads(arguments) if arguments else {}
+        except (TypeError, ValueError):
+            options = {}
+        self._open_at = options.get("open_at")
 
         try:
             self._create_viewer(url)
@@ -427,19 +493,25 @@ class AppBuffer(Buffer):
                     buffer.book_handler.set_book(
                         data["base"], data["pathtoebook"]
                     )
+                    buffer._send_book_data()
                 super().load_finished(ok, data)
                 if ok:
                     buffer.activate_context()
 
         viewer = self.viewer = EmbeddedEbookViewer()
         viewer.setWindowFlags(Qt.WindowType.Widget)
-        profile = viewer.web_view.page().profile()
+        page = viewer.web_view.page()
+        profile = page.profile()
+        self.web_channel = QWebChannel(page)
+        self.web_channel.registerObject("pyobject", self)
+        page.setWebChannel(
+            self.web_channel, QWebEngineScript.ScriptWorldId.ApplicationWorld
+        )
         self.book_handler = _PROFILE_HANDLERS[id(profile)]
 
         self.add_widget(viewer)
         self._install_webengine_event_filters()
         viewer.windowTitleChanged.connect(self.change_title)
-        viewer.web_view.selection_changed.connect(self._selection_changed)
 
         # Fullscreen and quit belong to the containing EAF buffer, not to an
         # independent calibre top-level window.
@@ -459,7 +531,15 @@ class AppBuffer(Buffer):
         self._viewer_ui = viewer_ui
         self._web_view_module = web_view_module
         self.activate_context()
-        viewer.load_ebook(book_path)
+        viewer.load_ebook(book_path, open_at=self._open_at)
+
+    @PostGui()
+    def open_at(self, location):
+        """Move an already-open viewer using calibre's native search."""
+        if self.viewer is None or not location:
+            return
+        if location.startswith("search:"):
+            self.viewer.show_search(location[len("search:"):], trigger=True)
 
     def _show_startup_error(self, error):
         message = "EAF Calibre E-book Viewer failed to start:\n\n{}".format(error)
@@ -512,22 +592,65 @@ class AppBuffer(Buffer):
             self.activate_context()
             self.viewer.web_view.trigger_shortcut(action)
 
-    def _selection_changed(self, text, annotation_data):
-        del annotation_data
-        self._last_selected_text = text or ""
+    def _send_text_context(self, text_context):
+        text_context = dict(text_context or {})
+        text_context["book"] = {"path": self.url}
+        eval_in_emacs(
+            "eaf-ebook-viewer-set-text-context",
+            [self.buffer_id, json.dumps(text_context, ensure_ascii=False)],
+        )
 
-    def selected_text(self):
+    def _send_book_data(self):
+        """Expose calibre's parsed metadata and manifest to the EAF buffer."""
+        eval_in_emacs(
+            "eaf-ebook-viewer-set-book-data",
+            [
+                self.buffer_id,
+                json.dumps(
+                    self.book_handler.parsed_metadata,
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    self.book_handler.parsed_manifest,
+                    ensure_ascii=False,
+                ),
+            ],
+        )
+
+    @pyqtSlot(str)
+    def text_context_changed(self, payload):
+        try:
+            text_context = json.loads(payload)
+        except (TypeError, ValueError):
+            return
+        text_context["word"] = " ".join(
+            (text_context.get("word") or "").split()
+        )
+        text_context["selection"] = " ".join(
+            (text_context.get("selection") or "").split()
+        )
+        text_context["context"] = " ".join(
+            (text_context.get("context") or "").split()
+        )
+        self._send_text_context(text_context)
+
+    def _request_text_context(self):
         if self.viewer is None:
-            return ["", self._last_selected_text]
-        return [self.viewer.web_view.selectedText(), self._last_selected_text]
+            self._send_text_context(
+                {"source": "mouse", "word": "", "context": ""}
+            )
+            return
+        web_view = self.viewer.web_view
+        point = web_view.mapFromGlobal(QCursor.pos())
+        web_view.page().runjs(
+            "window.eafEbookTextContextAtPoint({}, {})".format(
+                point.x(), point.y()
+            )
+        )
 
     @interactive
     def copy_select(self):
-        current, last = self.selected_text()
-        text = current or last
-        if text:
-            eval_in_emacs("kill-new", [text])
-            message_to_emacs(text)
+        self._request_text_context()
 
     @interactive
     def scroll_down(self):

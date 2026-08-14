@@ -2,7 +2,7 @@
 
 Ebook Viewer application for the [Emacs Application Framework](https://github.com/emacs-eaf/emacs-application-framework), powered by calibre's native E-book Viewer.
 
-It supports EPUB, MOBI, AZW3, FB2 and other formats supported by calibre. Books are opened from a read-only local cache, so the original file is not modified.
+It supports EPUB, MOBI, AZW3, FB2 and other formats supported by calibre. Local books are opened directly. Books stored by a macOS cloud file provider are downloaded to a read-only local cache first.
 
 ### Load application
 
@@ -40,6 +40,10 @@ Python. It does not require Calibre to be installed and does not launch
 
 Open a supported ebook with `find-file` or `eaf-open`.
 
+After a book is loaded, Calibre's parsed data is available in the
+buffer-local variables `eaf-ebook-viewer-book-metadata` and
+`eaf-ebook-viewer-book-manifest`.
+
 ### Keybindings
 
 | Key | Event |
@@ -62,4 +66,5 @@ Open a supported ebook with `find-file` or `eaf-open`.
 | `R` | Read aloud |
 | `r` | Reload book |
 | `f` | Toggle fullscreen |
-| `x` / `q` | Close buffer |
+| `q` | Return to Evil normal state |
+| `x` | Close buffer |
