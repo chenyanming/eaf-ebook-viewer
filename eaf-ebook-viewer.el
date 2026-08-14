@@ -96,8 +96,7 @@
     ("g r" . "reload_book")
     ("f" . "toggle_fullscreen")
     ("<f11>" . "toggle_fullscreen")
-    ("x" . "close_buffer")
-    ("q" . evil-force-normal-state))
+    ("x" . "close_buffer"))
   "Keybindings for the Calibre-backed EAF E-book Viewer."
   :type '(alist :key-type string :value-type string)
   :group 'eaf-ebook-viewer)

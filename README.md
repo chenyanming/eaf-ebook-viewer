@@ -66,5 +66,4 @@ buffer-local variables `eaf-ebook-viewer-book-metadata` and
 | `R` | Read aloud |
 | `r` | Reload book |
 | `f` | Toggle fullscreen |
-| `q` | Return to Evil normal state |
 | `x` | Close buffer |
