@@ -4,6 +4,10 @@ Ebook Viewer application for the [Emacs Application Framework](https://github.co
 
 It supports EPUB, MOBI, AZW3, FB2 and other formats supported by calibre. Local books are opened directly. Books stored by a macOS cloud file provider are downloaded to a read-only local cache first.
 
+### Demo
+
+<img width="720" src="./demo.gif">
+
 ### Load application
 
 Install [EAF](https://github.com/emacs-eaf/emacs-application-framework#install), then install this app with EAF's installer.
