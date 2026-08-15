@@ -70,7 +70,7 @@ def compile_forms():
 
 
 def install_resources():
-    for name in ("viewer.js", "user-agent-data.json"):
+    for name in ("viewer.js", "user-agent-data.json", "icons.rcc"):
         target = CALIBRE / "resources" / name
         if not target.exists():
             source = ROOT / "generated" / name
@@ -145,9 +145,9 @@ def build_calibre():
                 cwd=CALIBRE,
                 env=env,
             )
+    install_resources()
     build_calibre_metadata_resources(env)
     compile_forms()
-    install_resources()
 
 
 class BuildRuntime(build):

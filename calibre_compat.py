@@ -9,7 +9,7 @@ import types
 import weakref
 
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPainter, QPalette, QPen
+from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPen
 from PyQt6.QtWidgets import QApplication, QWidget
 
 
@@ -208,3 +208,31 @@ def prepare_eaf_application():
         app.ensure_window_on_screen = ensure_window_on_screen
     module = sys.modules["calibre_extensions.progress_indicator"]
     app.pi = module
+
+    # Calibre normally does this while constructing its own QApplication.
+    # EAF already owns the application, so register the bundled icon themes
+    # here and keep their light/dark variant in sync with EAF's palette.
+    from calibre.gui2 import icon_resource_manager
+
+    if not icon_resource_manager.initialized:
+        theme_paths = QIcon.themeSearchPaths()
+        fallback_paths = QIcon.fallbackSearchPaths()
+        icon_resource_manager.initialize()
+        # Calibre owns its QApplication and replaces these paths.  EAF shares
+        # one QApplication between apps, so retain the system paths as
+        # fallbacks for non-Calibre Qt widgets.
+        QIcon.setThemeSearchPaths(list(dict.fromkeys(
+            theme_paths + QIcon.themeSearchPaths()
+        )))
+        QIcon.setFallbackSearchPaths(list(dict.fromkeys(
+            fallback_paths + QIcon.fallbackSearchPaths()
+        )))
+    icon_resource_manager.set_theme()
+    if not getattr(app, "_eaf_calibre_icon_theme_connected", False):
+        def refresh_icon_theme():
+            app.is_dark_theme = app.palette_manager.is_dark_theme
+            icon_resource_manager.set_theme()
+
+        app._eaf_calibre_refresh_icon_theme = refresh_icon_theme
+        app.palette_changed.connect(refresh_icon_theme)
+        app._eaf_calibre_icon_theme_connected = True

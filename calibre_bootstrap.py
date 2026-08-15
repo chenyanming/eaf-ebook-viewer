@@ -35,8 +35,11 @@ def initialize():
             "Ebook Viewer runtime is not built (missing {}). Run EAF's "
             "installer for ebook-viewer with --force.".format(", ".join(missing))
         )
-    if not os.path.isfile(os.path.join(RESOURCES, "viewer.js")):
-        raise RuntimeError("Calibre viewer.js is missing; reinstall ebook-viewer")
+    for resource in ("viewer.js", "icons.rcc"):
+        if not os.path.isfile(os.path.join(RESOURCES, resource)):
+            raise RuntimeError(
+                "Calibre {} is missing; reinstall ebook-viewer".format(resource)
+            )
     sys.resources_location = RESOURCES
     sys.extensions_location = EXTENSIONS
     sys.executables_location = APP_DIR
