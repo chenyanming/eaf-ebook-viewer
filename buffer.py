@@ -44,6 +44,40 @@ from calibre_bootstrap import initialize as initialize_calibre
 
 _PROFILE_HANDLERS = {}
 _ZIP_EBOOK_EXTENSIONS = {".epub", ".fbz", ".htmlz", ".txtz"}
+_CALIBRE_RESIZE_HANDLERS = (
+    (
+        b'window.addEventListener("resize", '
+        b'debounce(view.on_resize.bind(self), 250));',
+        b'''(function () {
+            var eafResizePending = false;
+            window.addEventListener("resize", function () {
+                if (!eafResizePending) {
+                    eafResizePending = true;
+                    window.requestAnimationFrame(function () {
+                        eafResizePending = false;
+                        view.on_resize();
+                    });
+                }
+            });
+        })();''',
+    ),
+    (
+        b'window.addEventListener("resize", '
+        b'debounce(self.onresize, 500));',
+        b'''(function () {
+            var eafResizePending = false;
+            window.addEventListener("resize", function () {
+                if (!eafResizePending) {
+                    eafResizePending = true;
+                    window.requestAnimationFrame(function () {
+                        eafResizePending = false;
+                        self.onresize();
+                    });
+                }
+            });
+        })();''',
+    ),
+)
 
 
 def _qt_webchannel_script():
@@ -54,6 +88,16 @@ def _qt_webchannel_script():
         return bytes(resource.readAll()).decode("utf-8")
     finally:
         resource.close()
+
+
+def _enable_immediate_calibre_resize(viewer_js):
+    """Update Calibre layout before paint and again after resize settles."""
+    for delayed, responsive in _CALIBRE_RESIZE_HANDLERS:
+        if delayed in viewer_js:
+            viewer_js = viewer_js.replace(
+                delayed, responsive + b"\n" + delayed, 1
+            )
+    return viewer_js
 
 
 def _activate_emacs_after_mouse_release():
@@ -401,6 +445,7 @@ def _install_isolated_profile_factory(web_view_module):
         viewer_js = resource_path(
             "viewer.js", data=True, allow_user_override=False
         )
+        viewer_js = _enable_immediate_calibre_resize(viewer_js)
         try:
             translations = get_translations_data() or b"null"
         except FileNotFoundError:
