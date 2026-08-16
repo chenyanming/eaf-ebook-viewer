@@ -679,6 +679,24 @@ class AppBuffer(Buffer):
         )
         self._send_text_context(text_context)
 
+    @pyqtSlot(str)
+    def word_clicked(self, payload):
+        try:
+            context = json.loads(payload)
+        except (TypeError, ValueError):
+            return
+        context["word"] = " ".join(
+            (context.get("word") or "").split()
+        )
+        context["context"] = " ".join(
+            (context.get("context") or "").split()
+        )
+        context["book"] = {"path": self.url}
+        eval_in_emacs(
+            "eaf-ebook-viewer-notify-word-clicked",
+            [self.buffer_id, json.dumps(context, ensure_ascii=False)],
+        )
+
     def _request_text_context(self):
         if self.viewer is None:
             self._send_text_context(

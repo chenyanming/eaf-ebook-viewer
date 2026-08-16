@@ -116,6 +116,14 @@
         const range = document.createRange();
         range.setStart(node, start);
         range.setEnd(node, end);
+        // caretRangeFromPoint() can snap an empty part of the page to the
+        // nearest text node. Only accept clicks that actually intersect the
+        // rendered word.
+        const hitsWord = Array.from(range.getClientRects()).some(rect =>
+            x >= rect.left && x <= rect.right &&
+            y >= rect.top && y <= rect.bottom
+        );
+        if (!hitsWord) return null;
         const context = contextForRange(range, word);
         return rangeSnapshot(range, 'mouse', word, context, {x, y});
     };
@@ -130,6 +138,35 @@
                 contextForRange(range, text), null)
         ), '*');
     };
+
+    let selectionTimer = null;
+    if (window !== window.top) {
+        document.addEventListener('selectionchange', () => {
+            window.clearTimeout(selectionTimer);
+            selectionTimer = window.setTimeout(() => {
+                const selection = window.getSelection();
+                if (selection && !selection.isCollapsed && selection.rangeCount) {
+                    sendSelection(selection);
+                }
+            }, 40);
+        });
+
+        document.addEventListener('click', event => {
+            if (event.button !== 0) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed) return;
+            const clicked = wordAtPoint(event.clientX, event.clientY);
+            if (!clicked) return;
+            window.top.postMessage(Object.assign(
+                {
+                    type: 'eaf-ebook-word-clicked',
+                    link: event.target.closest?.('a[href]')?.href || ''
+                },
+                clicked,
+                {source: 'click'}
+            ), '*');
+        });
+    }
 
     window.addEventListener('message', event => {
         const data = event.data;
@@ -179,6 +216,8 @@
                 if (!data) return;
                 if (data.type === 'eaf-ebook-text-context') {
                     pyobject.text_context_changed(JSON.stringify(data));
+                } else if (data.type === 'eaf-ebook-word-clicked') {
+                    pyobject.word_clicked(JSON.stringify(data));
                 }
             });
         });
