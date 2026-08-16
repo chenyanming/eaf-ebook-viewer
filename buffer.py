@@ -533,6 +533,10 @@ class AppBuffer(Buffer):
         buffer = self
 
         class EmbeddedEbookViewer(EbookViewer):
+            def update_window_title(self):
+                """Keep the EAF buffer name consistent with NOV."""
+                self.setWindowTitle(os.path.basename(url))
+
             def load_finished(self, ok, data):
                 if ok:
                     buffer.book_handler.set_book(
