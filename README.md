@@ -44,6 +44,11 @@ Python. It does not require Calibre to be installed and does not launch
 
 Open a supported ebook with `find-file` or `eaf-open`.
 
+Calibre's Read Aloud settings include an optional Microsoft Edge Online TTS
+engine. It supports configurable voices, speed, pitch and volume, and requires
+an internet connection while synthesizing speech. The system TTS engines remain
+available and can be selected at any time.
+
 After a book is loaded, Calibre's parsed data is available in the
 buffer-local variables `eaf-ebook-viewer-book-metadata` and
 `eaf-ebook-viewer-book-manifest`.

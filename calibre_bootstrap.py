@@ -45,10 +45,15 @@ def initialize():
     sys.executables_location = APP_DIR
     sys.system_plugins_location = None
 
-    from calibre_compat import install_imageops_shim, install_progress_indicator_shim
+    from calibre_compat import (
+        install_imageops_shim,
+        install_progress_indicator_shim,
+        install_tts_capability_shim,
+    )
 
     install_progress_indicator_shim()
     install_imageops_shim()
+    install_tts_capability_shim()
     import calibre  # noqa: F401 - initializes Calibre's import hooks
 
     # Calibre normally launches calibre-parallel here.  Keep the official
@@ -59,6 +64,12 @@ def initialize():
     worker_command = lambda *args, **kwargs: [sys.executable, WORKER, "--worker"]
     startup.get_debug_executable = worker_command
     ipc_launch.headless_exe_path = worker_command
+
+    # Optional app-owned TTS engines are registered at runtime so the
+    # vendored Calibre source remains untouched.
+    from edge_tts_backend import install_edge_tts_backend
+
+    install_edge_tts_backend()
 
     from calibre_compat import prepare_eaf_application
 

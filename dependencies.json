@@ -5,6 +5,8 @@
   "apt": [
     "build-essential",
     "libicu-dev",
+    "libpulse0",
+    "libxrandr2",
     "libxml2-dev",
     "libxslt1-dev",
     "pyqt6-dev-tools"
@@ -13,12 +15,16 @@
     "gcc",
     "gcc-c++",
     "libicu-devel",
+    "libXrandr",
     "libxml2-devel",
-    "libxslt-devel"
+    "libxslt-devel",
+    "pulseaudio-libs"
   ],
   "pacman": [
     "base-devel",
     "icu",
+    "libpulse",
+    "libxrandr",
     "libxml2",
     "libxslt"
   ],
@@ -28,6 +34,7 @@
       "beautifulsoup4",
       "css-parser",
       "dnspython",
+      "edge-tts>=7.2,<8",
       "feedparser",
       "fonttools",
       "html2text",
@@ -55,6 +62,7 @@
       "beautifulsoup4",
       "css-parser",
       "dnspython",
+      "edge-tts>=7.2,<8",
       "feedparser",
       "fonttools",
       "html2text",

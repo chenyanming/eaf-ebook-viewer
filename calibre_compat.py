@@ -7,6 +7,7 @@ import math
 import sys
 import types
 import weakref
+from enum import IntFlag
 
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPen
@@ -14,6 +15,35 @@ from PyQt6.QtWidgets import QApplication, QWidget
 
 
 _ACTION_MENUS = weakref.WeakKeyDictionary()
+
+
+def install_tts_capability_shim():
+    """Backfill the Qt 6.6+ TTS capability API for older EAF Qt builds."""
+    from qt.core import QTextToSpeech
+
+    if not hasattr(QTextToSpeech.State, "Synthesizing"):
+        # Calibre only uses this member when checking whether speech should be
+        # resumed after changing settings. Edge tracks synthesis separately,
+        # so an unequal placeholder preserves the intended membership test.
+        QTextToSpeech.State.Synthesizing = object()
+
+    if hasattr(QTextToSpeech, "engineCapabilities"):
+        return
+
+    class Capability(IntFlag):
+        WordByWordProgress = 1
+        Synthesize = 2
+
+    def engine_capabilities(tts):
+        capabilities = Capability(0)
+        if tts.engine() in ("darwin", "winrt", "sapi", "flite"):
+            capabilities |= Capability.WordByWordProgress
+        if hasattr(tts, "synthesize"):
+            capabilities |= Capability.Synthesize
+        return capabilities
+
+    QTextToSpeech.Capability = Capability
+    QTextToSpeech.engineCapabilities = engine_capabilities
 
 
 class ProgressIndicator(QWidget):
