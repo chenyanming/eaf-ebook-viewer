@@ -23,80 +23,80 @@
 
 (defcustom eaf-ebook-viewer-keybinding
   '(;; NOV/EAF-style navigation.
-    ("j" . "scroll_down")
-    ("k" . "scroll_up")
-    ("<down>" . "scroll_down")
-    ("<up>" . "scroll_up")
-    ("<left>" . "scroll_left")
-    ("<right>" . "scroll_right")
-    ("C-n" . "scroll_down")
-    ("C-p" . "scroll_up")
-    ("d" . "next_page")
-    ("u" . "previous_page")
-    ("SPC" . "next_page")
-    ("S-SPC" . "previous_page")
-    ("C-v" . "next_page")
-    ("M-v" . "previous_page")
-    ("l" . "next_section")
-    ("h" . "previous_section")
-    ("]]" . "next_section")
-    ("[[" . "previous_section")
-    ("H" . "history_back")
-    ("L" . "history_forward")
-    ("g b" . "history_back")
-    ("g f" . "history_forward")
-    ("g g" . "start_of_book")
-    ("G" . "end_of_book")
-    ("<home>" . "start_of_file")
-    ("<end>" . "end_of_file")
+    ("j" . "insert_or_scroll_down")
+    ("k" . "insert_or_scroll_up")
+    ("<down>" . "insert_or_scroll_down")
+    ("<up>" . "insert_or_scroll_up")
+    ("<left>" . "insert_or_scroll_left")
+    ("<right>" . "insert_or_scroll_right")
+    ("C-n" . "insert_or_scroll_down")
+    ("C-p" . "insert_or_scroll_up")
+    ("d" . "insert_or_next_page")
+    ("u" . "insert_or_previous_page")
+    ("SPC" . "insert_or_next_page")
+    ("S-SPC" . "insert_or_previous_page")
+    ("C-v" . "insert_or_next_page")
+    ("M-v" . "insert_or_previous_page")
+    ("l" . "insert_or_next_section")
+    ("h" . "insert_or_previous_section")
+    ("]]" . "insert_or_next_section")
+    ("[[" . "insert_or_previous_section")
+    ("H" . "insert_or_history_back")
+    ("L" . "insert_or_history_forward")
+    ("g b" . "insert_or_history_back")
+    ("g f" . "insert_or_history_forward")
+    ("g g" . "insert_or_start_of_book")
+    ("G" . "insert_or_end_of_book")
+    ("<home>" . "insert_or_start_of_file")
+    ("<end>" . "insert_or_end_of_file")
 
     ;; Reading layout.
-    ("+" . "increase_font_size")
-    ("=" . "increase_font_size")
-    ("-" . "decrease_font_size")
-    ("0" . "default_font_size")
-    ("M-]" . "increase_number_of_columns")
-    ("M-[" . "decrease_number_of_columns")
-    ("M-0" . "reset_number_of_columns")
-    ("p" . "toggle_paged_mode")
-    ("s" . "toggle_scrollbar")
-    ("v" . "toggle_reference_mode")
-    ("A" . "toggle_autoscroll")
-    (">" . "increase_autoscroll_speed")
-    ("<" . "decrease_autoscroll_speed")
+    ("+" . "insert_or_increase_font_size")
+    ("=" . "insert_or_increase_font_size")
+    ("-" . "insert_or_decrease_font_size")
+    ("0" . "insert_or_default_font_size")
+    ("M-]" . "insert_or_increase_number_of_columns")
+    ("M-[" . "insert_or_decrease_number_of_columns")
+    ("M-0" . "insert_or_reset_number_of_columns")
+    ("p" . "insert_or_toggle_paged_mode")
+    ("s" . "insert_or_toggle_scrollbar")
+    ("v" . "insert_or_toggle_reference_mode")
+    ("A" . "insert_or_toggle_autoscroll")
+    (">" . "insert_or_increase_autoscroll_speed")
+    ("<" . "insert_or_decrease_autoscroll_speed")
 
     ;; Panels and book information.  Both t and T intentionally match NOV.
-    ("t" . "toggle_toc")
-    ("T" . "toggle_toc")
-    ("g t" . "toggle_toc")
-    ("g T" . "toggle_toc")
-    ("b" . "toggle_bookmarks")
-    ("m" . "new_bookmark")
-    ("a" . "toggle_highlights")
-    ("D" . "toggle_lookup")
-    ("g m" . "show_metadata")
-    ("g p" . "show_profiles")
-    ("," . "show_preferences")
-    (";" . "goto_location")
-    ("<escape>" . "show_controls")
+    ("t" . "insert_or_toggle_toc")
+    ("T" . "insert_or_toggle_toc")
+    ("g t" . "insert_or_toggle_toc")
+    ("g T" . "insert_or_toggle_toc")
+    ("b" . "insert_or_toggle_bookmarks")
+    ("m" . "insert_or_new_bookmark")
+    ("a" . "insert_or_toggle_highlights")
+    ("D" . "insert_or_toggle_lookup")
+    ("g m" . "insert_or_show_metadata")
+    ("g p" . "insert_or_show_profiles")
+    ("," . "insert_or_show_preferences")
+    (";" . "insert_or_goto_location")
+    ("<escape>" . "insert_or_show_controls")
 
     ;; Search, selection and utility actions.
-    ("/" . "show_search")
-    ("C-s" . "show_search")
-    ("n" . "find_next")
-    ("N" . "find_previous")
-    ("y" . "copy_select")
-    ("M-w" . "copy_select")
-    ("Y" . "copy_location")
-    ("g y" . "copy_location_as_url")
-    ("C-a" . "select_all")
-    ("?" . "toggle_hints")
-    ("R" . "read_aloud")
-    ("r" . "reload_book")
-    ("g r" . "reload_book")
-    ("f" . "toggle_fullscreen")
-    ("<f11>" . "toggle_fullscreen")
-    ("x" . "close_buffer"))
+    ("/" . "insert_or_show_search")
+    ("C-s" . "insert_or_show_search")
+    ("n" . "insert_or_find_next")
+    ("N" . "insert_or_find_previous")
+    ("y" . "insert_or_copy_select")
+    ("M-w" . "insert_or_copy_select")
+    ("Y" . "insert_or_copy_location")
+    ("g y" . "insert_or_copy_location_as_url")
+    ("C-a" . "insert_or_select_all")
+    ("?" . "insert_or_toggle_hints")
+    ("R" . "insert_or_read_aloud")
+    ("r" . "insert_or_reload_book")
+    ("g r" . "insert_or_reload_book")
+    ("f" . "insert_or_toggle_fullscreen")
+    ("<f11>" . "insert_or_toggle_fullscreen")
+    ("x" . "insert_or_close_buffer"))
   "Keybindings for the Calibre-backed EAF E-book Viewer."
   :type '(alist :key-type string :value-type string)
   :group 'eaf-ebook-viewer)
@@ -104,6 +104,48 @@
 (defconst eaf-ebook-viewer--directory
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing the EAF E-book Viewer application.")
+
+(defvar eaf-ebook-viewer-input-mode-map (make-sparse-keymap)
+  "Keymap active while a Calibre text editor has focus.")
+
+;; EAF buffers contain a fallback image whose text-property map includes an
+;; `i' prefix.  Give actual text input a complete pass-through map so neither
+;; that map nor a reader binding can capture characters meant for an editor.
+(define-key eaf-ebook-viewer-input-mode-map
+            [remap self-insert-command] #'eaf-send-key)
+(dotimes (offset 95)
+  (define-key eaf-ebook-viewer-input-mode-map
+              (vector (+ 32 offset)) #'eaf-send-key))
+(dolist (key '("RET" "DEL" "TAB" "<backtab>" "<home>" "<end>"
+               "<left>" "<right>" "<up>" "<down>" "<prior>" "<next>"
+               "<delete>" "<backspace>" "<return>" "<escape>"))
+  (define-key eaf-ebook-viewer-input-mode-map (kbd key) #'eaf-send-key))
+
+(defvar-local eaf-ebook-viewer--input-map-active nil)
+(defvar-local eaf-ebook-viewer--saved-overriding-local-map nil)
+
+(defun eaf-ebook-viewer-update-focus-state (buffer-id state)
+  "Update editing STATE for Ebook Viewer BUFFER-ID."
+  (when-let ((buffer (eaf-get-buffer buffer-id)))
+    (with-current-buffer buffer
+      (setq-local eaf-buffer-input-focus state)
+      (cond
+       ((and state (not eaf-ebook-viewer--input-map-active))
+        (setq-local eaf-ebook-viewer--saved-overriding-local-map
+                    overriding-local-map)
+        (setq-local overriding-local-map
+                    (make-composed-keymap
+                     (delq nil
+                           (list eaf-ebook-viewer-input-mode-map
+                                 eaf-ebook-viewer--saved-overriding-local-map))
+                     (or (cdr (assq t eaf--buffer-map-alist))
+                         (current-local-map))))
+        (setq-local eaf-ebook-viewer--input-map-active t))
+       ((and (not state) eaf-ebook-viewer--input-map-active)
+        (setq-local overriding-local-map
+                    eaf-ebook-viewer--saved-overriding-local-map)
+        (setq-local eaf-ebook-viewer--saved-overriding-local-map nil)
+        (setq-local eaf-ebook-viewer--input-map-active nil))))))
 
 (defun eaf-ebook-viewer--add-python-path ()
   "Expose the app bootstrap to EAF's unchanged Python process."
@@ -116,6 +158,10 @@
                          path-separator)))))
 
 (eaf-ebook-viewer--add-python-path)
+
+;; The keybinding uses the input-aware wrapper, while integrations need to
+;; request the selection unconditionally through `eaf-execute-app-cmd'.
+(eaf--make-py-proxy-function "copy_select")
 
 (defvar-local eaf-ebook-viewer-text-context nil
   "Latest text context returned by Ebook Viewer.")

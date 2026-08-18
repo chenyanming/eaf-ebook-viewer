@@ -20,19 +20,30 @@ import traceback
 import zipfile
 from uuid import uuid4
 
-from PyQt6.QtCore import QEvent, QFile, QIODevice, QTimer, pyqtSlot
-from PyQt6.QtGui import QCursor
+from PyQt6.QtCore import QEvent, QFile, QIODevice, QTimer, Qt, pyqtSlot
+from PyQt6.QtGui import QCursor, QKeyEvent
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineScript
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget
+from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QLabel,
+    QLineEdit,
+    QPlainTextEdit,
+    QTextEdit,
+    QWidget,
+)
 
-from core.buffer import Buffer
+from core.buffer import Buffer, QT_KEY_DICT, QT_MODIFIER_DICT, QT_TEXT_DICT
 from core.utils import (
     PostGui,
     eval_in_emacs,
     focus_emacs_buffer,
     interactive,
     message_to_emacs,
+    post_event,
 )
 
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -102,7 +113,8 @@ def _enable_immediate_calibre_resize(viewer_js):
 
 def _activate_emacs_after_mouse_release():
     """Return keyboard focus to Emacs across old and new EAF versions."""
-    tracker = getattr(QApplication.instance(), "macos_window_tracker", None)
+    app = QApplication.instance()
+    tracker = getattr(app, "macos_window_tracker", None)
     if tracker is not None:
         tracker.activate_emacs_after_mouse_release()
     else:
@@ -110,29 +122,6 @@ def _activate_emacs_after_mouse_release():
         # function has been part of EAF for much longer and is also what its
         # PDF viewer uses after completing a mouse selection.
         eval_in_emacs("eaf-activate-emacs-window", [])
-
-
-def _handle_webengine_mouse_event(buffer_id, event):
-    """Integrate calibre's foreign WebEngine view with EAF input handling."""
-    focus_event_types = (
-        QEvent.Type.MouseButtonPress,
-        QEvent.Type.MouseButtonRelease,
-        QEvent.Type.MouseButtonDblClick,
-    )
-    if platform.system() != "Darwin":
-        focus_event_types += (QEvent.Type.Wheel,)
-
-    if (
-        event.type() == QEvent.Type.MouseButtonRelease
-        and platform.system() == "Darwin"
-    ):
-        # Let Qt finish its native text-selection gesture before moving the
-        # keyboard focus.  New EAF verifies the foreground process through
-        # its tracker; old EAF falls back to its established Emacs helper.
-        QTimer.singleShot(50, _activate_emacs_after_mouse_release)
-
-    if event.type() in focus_event_types:
-        focus_emacs_buffer(buffer_id)
 
 
 def _is_cloud_storage_path(path):
@@ -494,6 +483,8 @@ class AppBuffer(Buffer):
         super().__init__(buffer_id, url, arguments, False)
         self.viewer = None
         self.book_handler = None
+        self._input_focused = False
+        self._key_event_widget = None
         try:
             options = json.loads(arguments) if arguments else {}
         except (TypeError, ValueError):
@@ -559,7 +550,7 @@ class AppBuffer(Buffer):
         self.book_handler = _PROFILE_HANDLERS[id(profile)]
 
         self.add_widget(viewer)
-        self._install_webengine_event_filters()
+        self._install_application_event_filter()
         viewer.windowTitleChanged.connect(self.change_title)
 
         # Fullscreen and quit belong to the containing EAF buffer, not to an
@@ -616,10 +607,12 @@ class AppBuffer(Buffer):
                 self._web_view_module.set_book_path(base, path)
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt API name
-        if event.type() in (QEvent.Type.ChildAdded, QEvent.Type.ChildPolished):
-            child = event.child()
-            if isinstance(child, QWidget):
-                child.installEventFilter(self)
+        if not isinstance(watched, QWidget) or not self._belongs_to_viewer(watched):
+            return False
+        if event.type() == QEvent.Type.Show and isinstance(watched, QDialog):
+            QTimer.singleShot(
+                0, lambda dialog=watched: self._prepare_native_dialog_input(dialog)
+            )
         if event.type() in (
             QEvent.Type.FocusIn,
             QEvent.Type.KeyPress,
@@ -627,14 +620,177 @@ class AppBuffer(Buffer):
             QEvent.Type.Wheel,
         ):
             self.activate_context()
-        _handle_webengine_mouse_event(self.buffer_id, event)
+
+        if event.type() == QEvent.Type.FocusIn:
+            web_view = self.viewer.web_view
+            if watched is web_view or web_view.isAncestorOf(watched):
+                QTimer.singleShot(0, self._refresh_web_input_focus)
+            else:
+                input_widget = self._text_input_widget(watched)
+                self._set_input_focus(input_widget is not None, input_widget)
+
+        focus_event_types = (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+        )
+        if platform.system() != "Darwin":
+            focus_event_types += (QEvent.Type.Wheel,)
+        return_to_emacs = False
+        if event.type() in focus_event_types:
+            web_view = self.viewer.web_view
+            in_web_view = watched is web_view or web_view.isAncestorOf(watched)
+            if in_web_view:
+                if event.type() == QEvent.Type.MouseButtonRelease:
+                    # Calibre creates the inline highlight textarea from the
+                    # click handler and focuses it with setTimeout(0). Query
+                    # after that handler has completed, not before WebEngine
+                    # has received the mouse-release event.
+                    QTimer.singleShot(50, self._refresh_web_input_focus)
+                return_to_emacs = True
+            else:
+                input_widget = self._text_input_widget(watched)
+                self._set_input_focus(input_widget is not None, input_widget)
+                dialog = self._dialog_for_widget(watched)
+                if dialog is None and input_widget is None:
+                    # A Qt-side click (for example in the TOC) leaves the
+                    # prior DOM activeElement intact. Blur it so the next
+                    # is_focus() query cannot mistake an old editor for the
+                    # current target.
+                    self.viewer.web_view.page().runjs(
+                        "document.activeElement?.blur()"
+                    )
+                # Native modal dialogs must keep Qt focus for QTextEdit and
+                # other controls logically, while Emacs remains the actual
+                # keyboard owner just as it does for browser DOM inputs.
+                return_to_emacs = dialog is None or input_widget is not None
+            if return_to_emacs:
+                focus_emacs_buffer(self.buffer_id)
+
+        if event.type() in (QEvent.Type.Close, QEvent.Type.Hide):
+            if isinstance(watched, QDialog):
+                self._set_input_focus(False)
+                focus_emacs_buffer(self.buffer_id)
+                if platform.system() == "Darwin":
+                    QTimer.singleShot(50, _activate_emacs_after_mouse_release)
+
+        if (
+            event.type() == QEvent.Type.MouseButtonRelease
+            and platform.system() == "Darwin"
+            and return_to_emacs
+        ):
+            # Match EAF's browser behavior: finish the native Qt gesture,
+            # then return keyboard control to Emacs.  Keys are forwarded back
+            # to the selected Qt/HTML input while input focus is active.
+            QTimer.singleShot(50, _activate_emacs_after_mouse_release)
         return False
 
-    def _install_webengine_event_filters(self):
-        web_view = self.viewer.web_view
-        web_view.installEventFilter(self)
-        for child in web_view.findChildren(QWidget):
-            child.installEventFilter(self)
+    @staticmethod
+    def _text_input_widget(widget):
+        while isinstance(widget, QWidget):
+            if isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit,
+                                   QAbstractSpinBox)):
+                return widget
+            if isinstance(widget, QComboBox) and widget.isEditable():
+                return widget.lineEdit()
+            widget = widget.parentWidget()
+        return None
+
+    @staticmethod
+    def _dialog_for_widget(widget):
+        while isinstance(widget, QWidget):
+            if isinstance(widget, QDialog):
+                return widget
+            widget = widget.parentWidget()
+        return None
+
+    def _belongs_to_viewer(self, widget):
+        while widget is not None:
+            if widget is self.viewer:
+                return True
+            widget = widget.parent()
+        return False
+
+    def _prepare_native_dialog_input(self, dialog):
+        """Route Emacs keystrokes to a Calibre dialog's text editor."""
+        input_widget = next(
+            (
+                dialog.findChild(widget_type)
+                for widget_type in (
+                    QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox
+                )
+                if dialog.findChild(widget_type) is not None
+            ),
+            None,
+        )
+        if input_widget is not None:
+            input_widget.setFocus()
+            self._set_input_focus(True, input_widget)
+
+    def _set_input_focus(self, focused, widget=None):
+        self._input_focused = bool(focused)
+        self._key_event_widget = widget if focused else None
+        eval_in_emacs(
+            "eaf-ebook-viewer-update-focus-state",
+            [self.buffer_id, self._input_focused],
+        )
+
+    @PostGui()
+    def _refresh_web_input_focus(self):
+        page = self.viewer.web_view.page()
+        page.runJavaScript(
+            """(() => {
+                const active = document.activeElement;
+                if (!active) return false;
+                if (active.isContentEditable) return true;
+                const tag = active.tagName.toLowerCase();
+                if (tag === 'textarea' || tag === 'select') return true;
+                if (tag !== 'input') return false;
+                return !['button', 'checkbox', 'color', 'file', 'hidden',
+                    'image', 'radio', 'range', 'reset', 'submit'].includes(
+                        (active.type || 'text').toLowerCase());
+            })()""",
+            QWebEngineScript.ScriptWorldId.ApplicationWorld,
+            self._web_input_focus_changed,
+        )
+
+    def _web_input_focus_changed(self, focused):
+        focused = bool(focused)
+        if not focused and self._key_event_widget not in (
+            None, self.viewer.web_view
+        ):
+            try:
+                if self._key_event_widget.isVisible():
+                    return
+            except RuntimeError:
+                pass
+        self._set_input_focus(
+            focused, self.viewer.web_view if focused else None
+        )
+
+    def is_focus(self):
+        """Query the current editor, matching EAF BrowserBuffer behavior."""
+        if self._key_event_widget is not None and (
+            self._key_event_widget is not self.viewer.web_view
+        ):
+            try:
+                if self._key_event_widget.isVisible():
+                    return True
+            except RuntimeError:
+                self._key_event_widget = None
+        native_input = self._text_input_widget(QApplication.focusWidget())
+        if native_input is not None and (
+            native_input is self.viewer or self.viewer.isAncestorOf(native_input)
+        ):
+            self._set_input_focus(True, native_input)
+            return True
+        return self._input_focused
+
+    def _install_application_event_filter(self):
+        # Calibre editors such as NotesEditDialog are native top-level
+        # QDialogs. An application filter sees them reliably; parent-chain
+        # scoping in eventFilter keeps other EAF buffers and apps untouched.
+        QApplication.instance().installEventFilter(self)
 
     def _shortcut(self, action):
         if self.viewer is not None:
@@ -715,202 +871,257 @@ class AppBuffer(Buffer):
             )
         )
 
-    @interactive
+    @interactive(insert_or_do=True)
     def copy_select(self):
         self._request_text_context()
 
-    @interactive
+    @interactive(insert_or_do=True)
     def scroll_down(self):
         self._shortcut("down")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def scroll_up(self):
         self._shortcut("up")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def next_page(self):
         self._shortcut("pagedown")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def previous_page(self):
         self._shortcut("pageup")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def scroll_left(self):
         self._shortcut("left")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def scroll_right(self):
         self._shortcut("right")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def next_section(self):
         self._shortcut("next_section")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def previous_section(self):
         self._shortcut("previous_section")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def history_back(self):
         self._shortcut("back")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def history_forward(self):
         self._shortcut("forward")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def start_of_file(self):
         self._shortcut("start_of_file")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def end_of_file(self):
         self._shortcut("end_of_file")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def start_of_book(self):
         self._shortcut("start_of_book")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def end_of_book(self):
         self._shortcut("end_of_book")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def increase_font_size(self):
         self._shortcut("increase_font_size")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def decrease_font_size(self):
         self._shortcut("decrease_font_size")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def default_font_size(self):
         self._shortcut("default_font_size")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def increase_number_of_columns(self):
         self._shortcut("increase_number_of_columns")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def decrease_number_of_columns(self):
         self._shortcut("decrease_number_of_columns")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def reset_number_of_columns(self):
         self._shortcut("reset_number_of_columns")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_paged_mode(self):
         self._shortcut("toggle_paged_mode")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_scrollbar(self):
         self._shortcut("toggle_scrollbar")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_reference_mode(self):
         self._shortcut("toggle_reference_mode")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_autoscroll(self):
         self._shortcut("toggle_autoscroll")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def increase_autoscroll_speed(self):
         self._shortcut("scrollspeed_increase")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def decrease_autoscroll_speed(self):
         self._shortcut("scrollspeed_decrease")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_toc(self):
         self._shortcut("toggle_toc")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def show_search(self):
         self._shortcut("start_search")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def find_next(self):
         self._shortcut("next_match")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def find_previous(self):
         self._shortcut("previous_match")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def new_bookmark(self):
         self._shortcut("new_bookmark")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_bookmarks(self):
         self._shortcut("toggle_bookmarks")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_highlights(self):
         self._shortcut("toggle_highlights")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_lookup(self):
         self._shortcut("toggle_lookup")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def show_metadata(self):
         self._shortcut("metadata")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def show_profiles(self):
         self._shortcut("show_profiles")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def show_preferences(self):
         self._shortcut("preferences")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def goto_location(self):
         self._shortcut("goto_location")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def show_controls(self):
         self._shortcut("show_chrome")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def copy_location(self):
         self._shortcut("copy_location_to_clipboard")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def copy_location_as_url(self):
         self._shortcut("copy_location_as_url_to_clipboard")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def select_all(self):
         self._shortcut("select_all")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def toggle_hints(self):
         self._shortcut("toggle_hints")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def read_aloud(self):
         self._shortcut("read_aloud")
 
-    @interactive
+    @interactive(insert_or_do=True)
     def reload_book(self):
         if self.viewer is not None:
             self.activate_context()
             self.viewer.reload_book()
 
-    @interactive
+    @interactive(insert_or_do=True)
+    def toggle_fullscreen(self):
+        """Toggle EAF fullscreen, or type the invoking key in an editor."""
+        super().toggle_fullscreen()
+
+    @interactive(insert_or_do=True)
     def update_theme(self):
         if self.viewer is not None:
             self.activate_context()
             self.viewer.web_view.palette_changed()
 
     def get_key_event_widgets(self):
+        if self._key_event_widget is not None:
+            if self._key_event_widget is self.viewer.web_view:
+                return [self.viewer.web_view.focusProxy()]
+            return [self._key_event_widget]
         if self.viewer is not None:
-            return [self.viewer.web_view]
+            # Match EAF BrowserBuffer: QWebEngineView accepts synthetic key
+            # events through its focus proxy, not the outer view widget.
+            return [self.viewer.web_view.focusProxy()]
         return [self.buffer_widget]
+
+    @staticmethod
+    def _key_event_parts(event_string):
+        """Return Qt key data for one Emacs key description."""
+        parts = event_string.split("-")
+        modifiers = Qt.KeyboardModifier.NoModifier
+        while len(parts) > 1 and parts[0] in QT_MODIFIER_DICT:
+            modifiers |= QT_MODIFIER_DICT[parts.pop(0)]
+
+        key_name = "-".join(parts)
+        lookup_name = key_name.lower() if len(key_name) == 1 else key_name
+        if (
+            modifiers == Qt.KeyboardModifier.NoModifier
+            and (
+                key_name == "<backtab>"
+                or (len(key_name) == 1 and key_name.isupper())
+            )
+        ):
+            modifiers = Qt.KeyboardModifier.ShiftModifier
+
+        text = QT_TEXT_DICT.get(key_name, key_name)
+        return QT_KEY_DICT.get(lookup_name, Qt.Key.Key_unknown), modifiers, text
+
+    def _forward_key_events(self, event_string):
+        """Forward an Emacs key description to the active Calibre editor."""
+        widgets = self.get_key_event_widgets()
+        for chord in event_string.split():
+            key, modifiers, text = self._key_event_parts(chord)
+            for widget in widgets:
+                post_event(
+                    widget,
+                    QKeyEvent(QEvent.Type.KeyPress, key, modifiers, text),
+                )
+        self.send_key_filter(event_string)
+
+    @PostGui()
+    def send_key(self, event_string):
+        """Forward single, modified, or multi-key Emacs input."""
+        self._forward_key_events(event_string)
+
+    @PostGui()
+    def send_key_sequence(self, event_string):
+        """Use the same active-editor routing for explicit key sequences."""
+        self._forward_key_events(event_string)
 
     def all_views_hide(self):
         pass
@@ -929,12 +1140,17 @@ class AppBuffer(Buffer):
         self._shortcut("pagedown" if scroll_direction == "up" else "pageup")
 
     def send_key_filter(self, event_string):
-        pass
+        if self.viewer is not None:
+            # A key can create or close Calibre's inline highlight editor
+            # (H, Escape, Ctrl+Enter). Refresh after WebEngine has dispatched
+            # it so Emacs' insert-or-command state follows activeElement.
+            QTimer.singleShot(50, self._refresh_web_input_focus)
 
     def action_quit(self):
         self.close_buffer()
 
     def destroy_buffer(self):
+        QApplication.instance().removeEventFilter(self)
         if self.viewer is not None:
             self.activate_context()
             try:
