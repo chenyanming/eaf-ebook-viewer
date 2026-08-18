@@ -51,7 +51,26 @@ available and can be selected at any time.
 
 After a book is loaded, Calibre's parsed data is available in the
 buffer-local variables `eaf-ebook-viewer-book-metadata` and
-`eaf-ebook-viewer-book-manifest`.
+`eaf-ebook-viewer-book-manifest`. The current visible-page text is exposed through
+`eaf-ebook-viewer-document-text` and
+`eaf-ebook-viewer-document-changed-hook`.
+
+External integrations can use `eaf-ebook-viewer-set-text-highlights` to mark
+words without wrapping book text or changing Calibre's native annotations.
+Entries may be plain strings or include a `word` and a `style` containing
+`background`, `border`, and `opacity`. Native highlights are reported
+through `eaf-ebook-viewer-annotation-created-hook` and
+`eaf-ebook-viewer-annotation-removed-hook`, using their Calibre UUID.
+Changes to their plain-text notes run
+`eaf-ebook-viewer-annotation-updated-hook`; selecting one runs
+`eaf-ebook-viewer-annotation-clicked-hook`. Calibre selects an existing
+highlight with its native double-click gesture; ordinary clicks are left
+unchanged.
+Clicking a word runs
+`eaf-ebook-viewer-word-clicked-hook` with its text context.
+`eaf-ebook-viewer-create-highlight` creates a native Calibre highlight from
+the current selection. `eaf-ebook-viewer-delete-highlight` removes one by its
+Calibre UUID, and `eaf-ebook-viewer-set-highlight-notes` updates its notes.
 
 ### Keybindings
 

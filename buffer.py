@@ -8,6 +8,7 @@ Buffer and gives every book an isolated WebEngine profile/content handler.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -459,6 +460,13 @@ def _install_isolated_profile_factory(web_view_module):
                     encoding="utf-8",
                 ).read(),
             ),
+            create_script(
+                "eaf-text-highlights.js",
+                open(
+                    os.path.join(_APP_DIR, "text_highlights.js"),
+                    encoding="utf-8",
+                ).read(),
+            ),
         )
 
         handler = IsolatedBookHandler(profile)
@@ -483,6 +491,11 @@ class AppBuffer(Buffer):
         super().__init__(buffer_id, url, arguments, False)
         self.viewer = None
         self.book_handler = None
+        self._annotation_events_ready = False
+        self._known_highlights = {}
+        self._last_selected_highlight_id = None
+        self._last_text_context = {}
+        self._text_highlights = []
         self._input_focused = False
         self._key_event_widget = None
         try:
@@ -528,15 +541,39 @@ class AppBuffer(Buffer):
                 """Keep the EAF buffer name consistent with NOV."""
                 self.setWindowTitle(os.path.basename(url))
 
+            def load_ebook(self, *args, **kwargs):
+                # A reload replaces current_book_data asynchronously.  Do not
+                # let integrations operate on the previous book's annotations
+                # while Calibre is preparing the replacement.
+                buffer._annotation_events_ready = False
+                buffer._known_highlights = {}
+                buffer._last_selected_highlight_id = None
+                return super().load_ebook(*args, **kwargs)
+
             def load_finished(self, ok, data):
                 if ok:
                     buffer.book_handler.set_book(
                         data["base"], data["pathtoebook"]
                     )
-                    buffer._send_book_data()
                 super().load_finished(ok, data)
-                if ok:
+                if (
+                    ok
+                    and self.current_book_data
+                    and "annotations_map" in self.current_book_data
+                ):
+                    buffer._known_highlights = {
+                        item.get("uuid"): dict(item)
+                        for item in self.current_book_data["annotations_map"].get(
+                            "highlight", ()
+                        )
+                        if item.get("uuid") and not item.get("removed")
+                    }
+                    buffer._annotation_events_ready = True
                     buffer.activate_context()
+                    # This is deliberately after Calibre has populated
+                    # current_book_data and the initial annotation snapshot.
+                    buffer._send_book_data()
+                    buffer._apply_text_highlights()
 
         viewer = self.viewer = EmbeddedEbookViewer()
         viewer.setWindowFlags(Qt.WindowType.Widget)
@@ -552,6 +589,13 @@ class AppBuffer(Buffer):
         self.add_widget(viewer)
         self._install_application_event_filter()
         viewer.windowTitleChanged.connect(self.change_title)
+        viewer.web_view.loadFinished.connect(self._web_page_loaded)
+        viewer.web_view.highlights_changed.connect(
+            self._highlights_changed
+        )
+        viewer.web_view.selection_changed.connect(
+            self._selection_changed
+        )
 
         # Fullscreen and quit belong to the containing EAF buffer, not to an
         # independent calibre top-level window.
@@ -575,11 +619,13 @@ class AppBuffer(Buffer):
 
     @PostGui()
     def open_at(self, location):
-        """Move an already-open viewer using calibre's native search."""
+        """Move an already-open viewer using a Calibre location."""
         if self.viewer is None or not location:
             return
         if location.startswith("search:"):
             self.viewer.show_search(location[len("search:"):], trigger=True)
+        elif location.startswith("epubcfi("):
+            self.viewer.goto_cfi(location, add_to_history=True)
 
     def _show_startup_error(self, error):
         message = "EAF Calibre E-book Viewer failed to start:\n\n{}".format(error)
@@ -799,11 +845,195 @@ class AppBuffer(Buffer):
 
     def _send_text_context(self, text_context):
         text_context = dict(text_context or {})
+        self._last_text_context = text_context
         text_context["book"] = {"path": self.url}
         eval_in_emacs(
             "eaf-ebook-viewer-set-text-context",
             [self.buffer_id, json.dumps(text_context, ensure_ascii=False)],
         )
+
+    @staticmethod
+    def _annotation_cfi(annotation):
+        start_cfi = annotation.get("start_cfi") or ""
+        if start_cfi.startswith("epubcfi("):
+            return start_cfi
+        try:
+            spine_number = 2 * (int(annotation["spine_index"]) + 1)
+        except (KeyError, TypeError, ValueError):
+            return ""
+        return "epubcfi(/{0}{1})".format(spine_number, start_cfi)
+
+    def _send_annotation_created(self, annotation):
+        selected = " ".join(
+            (self._last_text_context.get("selection") or "").split()
+        )
+        highlighted = " ".join(
+            (annotation.get("highlighted_text") or "").split()
+        )
+        text_context = (
+            self._last_text_context
+            if selected and selected == highlighted
+            else None
+        )
+        payload = {
+            "annotation": annotation,
+            "locator": {
+                "type": "epubcfi",
+                "value": self._annotation_cfi(annotation),
+            },
+            "text_context": text_context,
+            "book": {"path": self.url},
+        }
+        eval_in_emacs(
+            "eaf-ebook-viewer-notify-annotation-created",
+            [self.buffer_id, json.dumps(payload, ensure_ascii=False)],
+        )
+
+    def _send_annotation_removed(self, annotation):
+        payload = {
+            "annotation": annotation,
+            "book": {"path": self.url},
+        }
+        eval_in_emacs(
+            "eaf-ebook-viewer-notify-annotation-removed",
+            [self.buffer_id, json.dumps(payload, ensure_ascii=False)],
+        )
+
+    def _send_annotation_updated(self, annotation):
+        payload = {
+            "annotation": annotation,
+            "locator": {
+                "type": "epubcfi",
+                "value": self._annotation_cfi(annotation),
+            },
+            "book": {"path": self.url},
+        }
+        eval_in_emacs(
+            "eaf-ebook-viewer-notify-annotation-updated",
+            [self.buffer_id, json.dumps(payload, ensure_ascii=False)],
+        )
+
+    def _send_annotation_clicked(self, annotation):
+        payload = {
+            "annotation": annotation,
+            "locator": {
+                "type": "epubcfi",
+                "value": self._annotation_cfi(annotation),
+            },
+            "book": {"path": self.url},
+        }
+        eval_in_emacs(
+            "eaf-ebook-viewer-notify-annotation-clicked",
+            [self.buffer_id, json.dumps(payload, ensure_ascii=False)],
+        )
+
+    def _annotations_map(self):
+        if self.viewer is None:
+            return None
+        current_book_data = getattr(self.viewer, "current_book_data", None)
+        if not isinstance(current_book_data, dict):
+            return None
+        annotations_map = current_book_data.get("annotations_map")
+        return annotations_map if hasattr(annotations_map, "get") else None
+
+    def _annotation_by_uuid(self, uuid):
+        annotations_map = self._annotations_map()
+        if annotations_map is None or not uuid:
+            return None
+        return next(
+            (
+                item
+                for item in annotations_map.get("highlight", ())
+                if item.get("uuid") == uuid and not item.get("removed")
+            ),
+            None,
+        )
+
+    def _selection_changed(self, _text, annotation_id):
+        if not annotation_id:
+            self._last_selected_highlight_id = None
+            return
+        if annotation_id == self._last_selected_highlight_id:
+            return
+        self._last_selected_highlight_id = annotation_id
+        annotation = self._annotation_by_uuid(annotation_id)
+        if annotation is not None:
+            self._send_annotation_clicked(annotation)
+
+    def _highlights_changed(self, highlights):
+        current = {
+            item.get("uuid"): dict(item)
+            for item in highlights
+            if item.get("uuid") and not item.get("removed")
+        }
+        if not self._annotation_events_ready:
+            self._known_highlights = current
+            return
+        for annotation in highlights:
+            annotation_id = annotation.get("uuid")
+            if (
+                annotation_id
+                and annotation_id in self._known_highlights
+                and annotation.get("removed")
+            ):
+                self._send_annotation_removed(annotation)
+            elif (
+                annotation_id
+                and annotation_id not in self._known_highlights
+                and not annotation.get("removed")
+                and annotation.get("highlighted_text")
+            ):
+                self._send_annotation_created(annotation)
+            elif (
+                annotation_id
+                and annotation_id in self._known_highlights
+                and not annotation.get("removed")
+                and annotation.get("notes")
+                != self._known_highlights[annotation_id].get("notes")
+            ):
+                self._send_annotation_updated(annotation)
+        self._known_highlights = current
+        # This signal originates in the WebChannel. Running JavaScript again
+        # before its callback unwinds can crash Qt WebEngine on macOS.
+        QTimer.singleShot(50, self._apply_text_highlights)
+
+    def _apply_text_highlights(self):
+        if self.viewer is None:
+            return
+        payload = json.dumps(self._text_highlights, ensure_ascii=False)
+        self.viewer.web_view.page().runjs(
+            "if (window.eafEbookSetTextHighlights) {"
+            "window.eafEbookSetTextHighlights(%s);}" % payload
+        )
+
+    def _web_page_loaded(self, ok):
+        if ok:
+            self._apply_text_highlights()
+
+    @PostGui()
+    def set_text_highlights(self, payload):
+        """Highlight a JSON list of words without changing book markup."""
+        try:
+            if isinstance(payload, str) and payload.startswith("base64:"):
+                payload = base64.b64decode(
+                    payload[len("base64:"):]
+                ).decode("utf-8")
+            entries = json.loads(payload) if isinstance(payload, str) else payload
+        except (TypeError, ValueError) as error:
+            print("Failed to parse text highlights: {!r}".format(error))
+            entries = []
+        self._text_highlights = [
+            entry
+            for entry in (entries or [])
+            if isinstance(entry, (str, dict))
+        ]
+        self._apply_text_highlights()
+
+    @PostGui()
+    def clear_text_highlights(self):
+        """Remove text highlights supplied by external integrations."""
+        self._text_highlights = []
+        self._apply_text_highlights()
 
     def _send_book_data(self):
         """Expose calibre's parsed metadata and manifest to the EAF buffer."""
@@ -840,14 +1070,23 @@ class AppBuffer(Buffer):
         self._send_text_context(text_context)
 
     @pyqtSlot(str)
+    def document_text_changed(self, payload):
+        try:
+            document = json.loads(payload)
+        except (TypeError, ValueError):
+            return
+        eval_in_emacs(
+            "eaf-ebook-viewer-set-document-text",
+            [self.buffer_id, json.dumps(document, ensure_ascii=False)],
+        )
+
+    @pyqtSlot(str)
     def word_clicked(self, payload):
         try:
             context = json.loads(payload)
         except (TypeError, ValueError):
             return
-        context["word"] = " ".join(
-            (context.get("word") or "").split()
-        )
+        context["word"] = " ".join((context.get("word") or "").split())
         context["context"] = " ".join(
             (context.get("context") or "").split()
         )
@@ -855,6 +1094,17 @@ class AppBuffer(Buffer):
         eval_in_emacs(
             "eaf-ebook-viewer-notify-word-clicked",
             [self.buffer_id, json.dumps(context, ensure_ascii=False)],
+        )
+
+    @pyqtSlot(str)
+    def text_highlights_rendered(self, payload):
+        try:
+            status = json.loads(payload)
+        except (TypeError, ValueError):
+            return
+        eval_in_emacs(
+            "eaf-ebook-viewer-set-text-highlight-status",
+            [self.buffer_id, json.dumps(status, ensure_ascii=False)],
         )
 
     def _request_text_context(self):
@@ -874,6 +1124,53 @@ class AppBuffer(Buffer):
     @interactive(insert_or_do=True)
     def copy_select(self):
         self._request_text_context()
+
+    @interactive(insert_or_do=True)
+    def create_highlight(self):
+        if self.viewer is not None:
+            self.viewer.web_view.page().runjs(
+                "window.eafEbookCreateHighlight && "
+                "window.eafEbookCreateHighlight()"
+            )
+
+    @interactive
+    @PostGui()
+    def delete_highlight(self, uuid):
+        """Delete Calibre's native highlight identified by UUID."""
+        if (
+            self.viewer is not None
+            and uuid
+            and self._annotation_events_ready
+            and self._annotations_map() is not None
+        ):
+            self.activate_context()
+            annotation = self._annotation_by_uuid(uuid)
+            if annotation is None:
+                self._send_annotation_removed(
+                    {"uuid": uuid, "removed": True}
+                )
+            else:
+                # WebView.highlight_action() forcibly focuses the embedded
+                # WebEngine view after dispatch. That native focus change can
+                # crash the EAF process on macOS, so use Calibre's same bridge
+                # action without the QWidget focus side effect.
+                self.viewer.web_view.execute_when_ready(
+                    "highlight_action", uuid, "delete"
+                )
+
+    @interactive
+    @PostGui()
+    def set_highlight_notes(self, uuid, notes):
+        """Set plain-text NOTES on Calibre's native highlight UUID."""
+        if (
+            self._annotation_events_ready
+            and self._annotation_by_uuid(uuid) is not None
+        ):
+            self.activate_context()
+            self.viewer.web_view.generic_action(
+                "set-notes-in-highlight",
+                {"uuid": uuid, "notes": notes or ""},
+            )
 
     @interactive(insert_or_do=True)
     def scroll_down(self):

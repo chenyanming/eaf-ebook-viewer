@@ -117,7 +117,7 @@
         range.setStart(node, start);
         range.setEnd(node, end);
         // caretRangeFromPoint() can snap an empty part of the page to the
-        // nearest text node. Only accept clicks that actually intersect the
+        // nearest text node.  Only accept clicks that actually intersect the
         // rendered word.
         const hitsWord = Array.from(range.getClientRects()).some(rect =>
             x >= rect.left && x <= rect.right &&
@@ -185,7 +185,100 @@
         ), '*');
     });
 
-    if (window !== window.top) return;
+    if (window !== window.top) {
+        let lastDocumentText = null;
+        let documentTimer = null;
+        let documentGeneration = 0;
+        const scheduleWork = callback => {
+            if (window.requestIdleCallback) {
+                window.requestIdleCallback(callback, {timeout: 100});
+            } else {
+                window.setTimeout(
+                    () => callback({timeRemaining: () => 8}), 0
+                );
+            }
+        };
+        const sendDocumentText = () => {
+            documentTimer = null;
+            const token = documentGeneration;
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const chunks = [];
+            const walker = document.createTreeWalker(
+                document.body || document.documentElement,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode(node) {
+                        if (!node.data || !node.data.trim()) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                        const parent = node.parentElement;
+                        if (!parent || parent.closest(
+                            'script, style, noscript, textarea, input, ' +
+                            '[contenteditable="true"], ' +
+                            '#eaf-ebook-text-highlight-overlay'
+                        )) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                }
+            );
+            const scan = deadline => {
+                if (token !== documentGeneration) return;
+                let count = 0;
+                let node = null;
+                while ((node = walker.nextNode())) {
+                    const range = document.createRange();
+                    range.selectNodeContents(node);
+                    const visible = Array.from(range.getClientRects()).some(
+                        rect => rect.bottom >= 0 && rect.top <= height &&
+                            rect.right >= 0 && rect.left <= width
+                    );
+                    if (visible) chunks.push(node.data);
+                    count++;
+                    if (count >= 100 && deadline.timeRemaining() <= 1) {
+                        scheduleWork(scan);
+                        return;
+                    }
+                }
+                const text = normalize(chunks.join(' '));
+                if (text === lastDocumentText) return;
+                lastDocumentText = text;
+                window.top.postMessage({
+                    type: 'eaf-ebook-document-changed',
+                    text,
+                    scope: 'page',
+                    language: document.documentElement.lang || '',
+                    document: {
+                        url: window.location.href,
+                        title: document.title || ''
+                    }
+                }, '*');
+            };
+            scheduleWork(scan);
+        };
+        const scheduleDocumentText = () => {
+            documentGeneration++;
+            window.clearTimeout(documentTimer);
+            documentTimer = window.setTimeout(sendDocumentText, 120);
+        };
+        new MutationObserver(scheduleDocumentText).observe(
+            document.body || document.documentElement,
+            {childList: true, subtree: true, characterData: true}
+        );
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', scheduleDocumentText,
+                {once: true});
+        } else {
+            scheduleDocumentText();
+        }
+        window.addEventListener('scroll', scheduleDocumentText, true);
+        window.addEventListener('resize', scheduleDocumentText);
+        window.visualViewport?.addEventListener('scroll', scheduleDocumentText);
+        window.visualViewport?.addEventListener('resize', scheduleDocumentText);
+        return;
+    }
 
     window.eafEbookTextContextAtPoint = (x, y) => {
         const target = document.elementFromPoint(x, y);
@@ -204,6 +297,21 @@
         }, '*');
     };
 
+    window.eafEbookCreateHighlight = () => {
+        const selectionBar =
+            document.getElementById('book-selection-bar-overlay');
+        if (!selectionBar ||
+            window.getComputedStyle(selectionBar).display === 'none') {
+            return false;
+        }
+        selectionBar.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'q',
+            bubbles: true,
+            cancelable: true
+        }));
+        return true;
+    };
+
     const connect = () => {
         if (!window.qt || !qt.webChannelTransport || !window.QWebChannel) {
             window.setTimeout(connect, 50);
@@ -218,6 +326,10 @@
                     pyobject.text_context_changed(JSON.stringify(data));
                 } else if (data.type === 'eaf-ebook-word-clicked') {
                     pyobject.word_clicked(JSON.stringify(data));
+                } else if (data.type === 'eaf-ebook-document-changed') {
+                    pyobject.document_text_changed(JSON.stringify(data));
+                } else if (data.type === 'eaf-ebook-text-highlights-status') {
+                    pyobject.text_highlights_rendered(JSON.stringify(data));
                 }
             });
         });
