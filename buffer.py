@@ -126,6 +126,8 @@ def _activate_emacs_after_mouse_release():
 
 
 def _is_cloud_storage_path(path):
+    if platform.system() != "Darwin":
+        return False
     parts = os.path.abspath(path).split(os.sep)
     return any(
         parts[index : index + 2] == ["Library", "CloudStorage"]
@@ -197,19 +199,15 @@ def _copy_cloud_file(source, destination):
 def _stage_book(path):
     """Materialize cloud books; pass ordinary local books through unchanged."""
     source = os.path.abspath(path)
-    source_stat = os.stat(source)
     extension = os.path.splitext(source)[1].lower()
 
     if not _is_cloud_storage_path(source):
+        source_stat = os.stat(source)
         if source_stat.st_size <= 0:
             raise RuntimeError("The e-book is empty: {}".format(source))
         _validate_zip_ebook(source, extension)
         return source
 
-    fingerprint = "\0".join(
-        (source, str(source_stat.st_size), str(source_stat.st_mtime_ns))
-    ).encode("utf-8")
-    cache_key = hashlib.sha256(fingerprint).hexdigest()
     if platform.system() == "Darwin":
         cache_root = os.path.expanduser("~/Library/Caches")
     elif platform.system() == "Windows":
@@ -220,50 +218,70 @@ def _stage_book(path):
         cache_root = os.environ.get(
             "XDG_CACHE_HOME", os.path.expanduser("~/.cache")
         )
-    cache_dir = os.path.join(
-        cache_root, "eaf-ebook-viewer", "books", cache_key
-    )
-    os.makedirs(cache_dir, exist_ok=True)
-    cached_path = os.path.join(cache_dir, os.path.basename(source))
+    announced = False
+    for attempt in range(3):
+        # The first read can cause File Provider to materialize a placeholder,
+        # changing its metadata. Recompute the cache key and retry within this
+        # same open request instead of making the user open the book twice.
+        source_stat = os.stat(source)
+        fingerprint = "\0".join(
+            (source, str(source_stat.st_size), str(source_stat.st_mtime_ns))
+        ).encode("utf-8")
+        cache_key = hashlib.sha256(fingerprint).hexdigest()
+        cache_dir = os.path.join(
+            cache_root, "eaf-ebook-viewer", "books", cache_key
+        )
+        os.makedirs(cache_dir, exist_ok=True)
+        cached_path = os.path.join(cache_dir, os.path.basename(source))
 
-    if os.path.isfile(cached_path):
-        try:
-            _validate_staged_book(
-                cached_path, source_stat.st_size, extension
+        if os.path.isfile(cached_path):
+            try:
+                _validate_staged_book(
+                    cached_path, source_stat.st_size, extension
+                )
+                os.chmod(cached_path, 0o444)
+                return cached_path
+            except RuntimeError:
+                # A prior interrupted download left a bad cache entry.
+                pass
+
+        if not announced:
+            message_to_emacs(
+                "Downloading cloud e-book to the local EAF cache..."
             )
+            announced = True
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=cache_key + ".", suffix=".download", dir=cache_dir
+        )
+        os.close(descriptor)
+        try:
+            _copy_cloud_file(source, temporary_path)
+            final_stat = os.stat(source)
+            changed = (
+                final_stat.st_size != source_stat.st_size
+                or final_stat.st_mtime_ns != source_stat.st_mtime_ns
+            )
+            if changed:
+                if attempt < 2:
+                    continue
+                raise RuntimeError(
+                    "Google Drive repeatedly changed the e-book while it was "
+                    "downloading. Wait for sync to finish, then reopen it: "
+                    "{}".format(source)
+                )
+            _validate_staged_book(
+                temporary_path, source_stat.st_size, extension
+            )
+            os.replace(temporary_path, cached_path)
             os.chmod(cached_path, 0o444)
             return cached_path
-        except RuntimeError:
-            # A prior interrupted download left a bad cache entry.  Replace it
-            # atomically after copying into a separate temporary file.
-            pass
+        finally:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
 
-    message_to_emacs("Downloading cloud e-book to the local EAF cache...")
-    descriptor, temporary_path = tempfile.mkstemp(
-        prefix=cache_key + ".", suffix=".download", dir=cache_dir
-    )
-    os.close(descriptor)
-    try:
-        _copy_cloud_file(source, temporary_path)
-
-        final_stat = os.stat(source)
-        if (
-            final_stat.st_size != source_stat.st_size
-            or final_stat.st_mtime_ns != source_stat.st_mtime_ns
-        ):
-            raise RuntimeError(
-                "Google Drive changed the e-book while it was downloading. "
-                "Wait for sync to finish, then reopen it: {}".format(source)
-            )
-        _validate_staged_book(temporary_path, source_stat.st_size, extension)
-        os.replace(temporary_path, cached_path)
-        os.chmod(cached_path, 0o444)
-        return cached_path
-    finally:
-        try:
-            os.unlink(temporary_path)
-        except FileNotFoundError:
-            pass
+    raise RuntimeError("Could not cache the cloud e-book: {}".format(source))
 
 
 def _install_isolated_profile_factory(web_view_module):
