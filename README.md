@@ -8,33 +8,59 @@ It supports EPUB, MOBI, AZW3, FB2 and other formats supported by calibre. Local 
 
 <img width="720" src="./demo.gif">
 
-### Load application
+### Install
 
-Install [EAF](https://github.com/emacs-eaf/emacs-application-framework#install), then install this app with EAF's installer.
-
-On macOS, install the compiler dependency first:
-
-```Shell
-brew install icu4c
-```
-
-On Linux, EAF installs the compiler and ICU development packages listed in
-`dependencies.json` for Debian/Ubuntu, Fedora and Arch Linux. On other
-distributions, install a C/C++ compiler and the ICU development package first.
+Install [EAF](https://github.com/emacs-eaf/emacs-application-framework#install)
+first, then run the following commands from the EAF repository root. Ebook
+Viewer is not in EAF's application registry yet, so `install-eaf.py` cannot
+install it.
 
 ```Shell
 git clone --recurse-submodules https://github.com/chenyanming/eaf-ebook-viewer.git \
-  ~/.emacs.d/site-lisp/emacs-application-framework/app/ebook-viewer
-cd ~/.emacs.d/site-lisp/emacs-application-framework
-./install-eaf.py --install ebook-viewer --force
+  app/ebook-viewer
 ```
+
+If you already cloned the repository without its submodules, run:
+
+```Shell
+git -C app/ebook-viewer submodule update --init --recursive
+```
+
+Install the system build dependencies for your platform:
+
+```Shell
+# Debian / Ubuntu
+sudo apt install build-essential libicu-dev libpulse0 libxrandr2 \
+  libxml2-dev libxslt1-dev pkg-config pyqt6-dev-tools
+
+# Fedora
+sudo dnf install gcc gcc-c++ libicu-devel libXrandr libxml2-devel \
+  libxslt-devel pkgconf-pkg-config pulseaudio-libs
+
+# Arch Linux
+sudo pacman -S base-devel icu libpulse libxrandr libxml2 libxslt pkgconf
+
+# macOS (Xcode Command Line Tools are also required)
+brew install icu4c
+```
+
+Build and install Ebook Viewer with the same Python environment used by EAF:
+
+```Shell
+python3 app/ebook-viewer/install.py
+```
+
+If you configured `eaf-python-command` to use a different interpreter, replace
+`python3` above with that interpreter. The installer verifies that lxml and
+html5-parser use compatible native libraries before building the vendored
+Calibre runtime.
 
 Add the application directory and configuration to Emacs:
 
 ```Elisp
-(add-to-list 'load-path
-             "~/.emacs.d/site-lisp/emacs-application-framework/app/ebook-viewer")
 (require 'eaf)
+(add-to-list 'load-path
+             (expand-file-name "app/ebook-viewer" eaf-source-dir))
 (require 'eaf-ebook-viewer)
 ```
 

@@ -5,12 +5,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from xml.etree import ElementTree
 
 from setuptools import setup
+from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools.command.build import build
-from wheel.bdist_wheel import bdist_wheel
 
 
 ROOT = Path(__file__).resolve().parent
@@ -21,6 +22,16 @@ MODULES = (
     "fast_html_entities", "cPalmdoc", "lzx", "msdes", "bzzdec",
     "unicode_names",
 )
+
+
+def runtime_dependencies():
+    """Return package requirements, excluding pip-only install options."""
+    dependency_path = ROOT / "requirements.txt"
+    return [
+        line
+        for raw_line in dependency_path.read_text(encoding="utf-8").splitlines()
+        if (line := raw_line.strip()) and not line.startswith(("#", "-"))
+    ]
 
 
 def build_environment():
@@ -34,11 +45,16 @@ def build_environment():
     )
     query.chmod(0o755)
     env = os.environ.copy()
+    python_path = [str(ROOT), str(CALIBRE / "src")]
+    python_path.extend(path for path in sys.path if path)
     env.update({
         "QMAKE": str(query),
         "CALIBRE_SETUP_EXTENSIONS_PATH": str(EXTENSIONS),
         "CALIBRE_HEADLESS_PLATFORM": "offscreen",
-        "PYTHONPATH": os.pathsep.join((str(ROOT), str(CALIBRE / "src"))),
+        # PEP 517 build isolation adds its dependencies to the build backend's
+        # sys.path while retaining the outer interpreter in sys.executable.
+        # Propagate that complete path when invoking Python subprocesses.
+        "PYTHONPATH": os.pathsep.join(dict.fromkeys(python_path)),
     })
     if sys.platform == "darwin":
         try:
@@ -49,13 +65,30 @@ def build_environment():
             raise RuntimeError("Install Homebrew icu4c before Ebook Viewer") from error
         env["CFLAGS"] = "-I" + prefix + "/include"
         env["LDFLAGS"] = "-L" + prefix + "/lib"
+    elif sys.platform.startswith("linux"):
+        try:
+            icu_libdir = subprocess.check_output(
+                ("pkg-config", "--variable=libdir", "icu-uc"), text=True
+            ).strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(
+                "Install pkg-config and the ICU development package before "
+                "Ebook Viewer"
+            ) from error
+        # Conda/Miniforge puts its own lib directory ahead of system libraries
+        # when linking Python extensions.  Prefer the ICU library matching the
+        # headers reported by pkg-config to avoid unresolved versioned symbols.
+        linker_flags = ["-L" + icu_libdir]
+        python_libdir = sysconfig.get_config_var("LIBDIR")
+        if python_libdir:
+            linker_flags.append("-Wl,-rpath," + python_libdir)
+        if env.get("LDFLAGS"):
+            linker_flags.append(env["LDFLAGS"])
+        env["LDFLAGS"] = " ".join(linker_flags)
     return env
 
 
-def compile_forms():
-    env = os.environ.copy()
-    env.pop("PYTHONNOUSERSITE", None)
-    env.pop("PYTHONPATH", None)
+def compile_forms(env):
     code = (
         "from PyQt6.uic import compileUi; import sys; "
         "f=open(sys.argv[2], 'w', encoding='utf-8'); "
@@ -147,7 +180,7 @@ def build_calibre():
             )
     install_resources()
     build_calibre_metadata_resources(env)
-    compile_forms()
+    compile_forms(env)
 
 
 class BuildRuntime(build):
@@ -167,6 +200,7 @@ setup(
     version="8.7.0",
     description="Calibre runtime builder for EAF Ebook Viewer",
     packages=[],
+    install_requires=runtime_dependencies(),
     cmdclass={"build": BuildRuntime, "bdist_wheel": PlatformWheel},
     python_requires=">=3.10",
 )

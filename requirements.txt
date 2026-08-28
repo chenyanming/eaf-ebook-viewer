@@ -1,0 +1,27 @@
+--no-binary=lxml
+
+apsw
+beautifulsoup4
+css-parser
+dnspython
+edge-tts>=7.2,<8
+feedparser
+fonttools
+html2text
+html5-parser
+chardet
+jeepney; sys_platform == "linux"
+lxml==5.2.1
+markdown
+mechanize
+msgpack
+netifaces
+pillow
+psutil
+py7zr
+pycryptodome
+pygments
+python-dateutil
+regex
+xxhash
+zeroconf
