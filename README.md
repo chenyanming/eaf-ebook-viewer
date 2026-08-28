@@ -10,52 +10,83 @@ It supports EPUB, MOBI, AZW3, FB2 and other formats supported by calibre. Local 
 
 ### Install
 
-Install [EAF](https://github.com/emacs-eaf/emacs-application-framework#install)
-first, then run the following commands from the EAF repository root. Ebook
-Viewer is not in EAF's application registry yet, so `install-eaf.py` cannot
-install it.
+Run all commands from the EAF repository root.
+
+#### 1. Install EAF
+
+Install [EAF](https://github.com/emacs-eaf/emacs-application-framework#install).
+
+Ebook Viewer is not in the EAF application registry. The EAF installer cannot
+clone Ebook Viewer.
+
+#### 2. Clone Ebook Viewer
 
 ```Shell
 git clone --recurse-submodules https://github.com/chenyanming/eaf-ebook-viewer.git \
   app/ebook-viewer
 ```
 
-If you already cloned the repository without its submodules, run:
+If you cloned the repository without its submodules, initialize them:
 
 ```Shell
 git -C app/ebook-viewer submodule update --init --recursive
 ```
 
-Install the system build dependencies for your platform:
+#### 3. Install the system build dependencies
+
+Run the command for your operating system.
+
+##### Debian or Ubuntu
 
 ```Shell
-# Debian / Ubuntu
 sudo apt install build-essential libicu-dev libpulse0 libxrandr2 \
   libxml2-dev libxslt1-dev pkg-config pyqt6-dev-tools
+```
 
-# Fedora
+##### Fedora
+
+```Shell
 sudo dnf install gcc gcc-c++ libicu-devel libXrandr libxml2-devel \
   libxslt-devel pkgconf-pkg-config pulseaudio-libs
+```
 
-# Arch Linux
+##### Arch Linux
+
+```Shell
 sudo pacman -S base-devel icu libpulse libxrandr libxml2 libxslt pkgconf
+```
 
-# macOS (Xcode Command Line Tools are also required)
+##### macOS
+
+Install the Xcode Command Line Tools:
+
+```Shell
+xcode-select --install
+```
+
+Then install ICU:
+
+```Shell
 brew install icu4c
 ```
 
-Build and install Ebook Viewer with the same Python environment used by EAF:
+#### 4. Build and install Ebook Viewer
+
+Use the same Python environment that EAF uses:
 
 ```Shell
 python3 app/ebook-viewer/install.py
 ```
 
-If you configured `eaf-python-command` to use a different interpreter, replace
-`python3` above with that interpreter. The installer verifies that lxml and
-html5-parser use compatible native libraries before building the vendored
-Calibre runtime.
+If `eaf-python-command` uses a different interpreter, replace `python3` with
+that interpreter.
 
-Add the application directory and configuration to Emacs:
+The installer makes sure that lxml and html5-parser use compatible native
+libraries. Then it builds the vendored Calibre runtime.
+
+#### 5. Configure Emacs
+
+Add this configuration to Emacs:
 
 ```Elisp
 (require 'eaf)
@@ -64,34 +95,58 @@ Add the application directory and configuration to Emacs:
 (require 'eaf-ebook-viewer)
 ```
 
-On macOS and Linux, the app builds its vendored Calibre 8.7 runtime for EAF's
-Python. It does not require Calibre to be installed and does not launch
-`calibre-debug`. Conversion workers use the same Python as EAF.
+#### 6. Open an ebook
 
 Open a supported ebook with `find-file` or `eaf-open`.
 
-Calibre's Read Aloud settings include an optional Microsoft Edge Online TTS
-engine. It supports configurable voices, speed, pitch and volume, and requires
-an internet connection while synthesizing speech. The system TTS engines remain
-available and can be selected at any time.
+### Installation details
+
+On macOS and Linux, Ebook Viewer builds its vendored Calibre 8.7 runtime for
+the EAF Python environment. You do not have to install Calibre. Ebook Viewer
+does not start `calibre-debug`. Conversion workers use the same Python
+interpreter as EAF.
+
+### Read aloud
+
+Calibre Read Aloud includes the optional Microsoft Edge Online TTS engine. You
+can configure its voice, speed, pitch, and volume. This engine requires an
+internet connection while it creates speech.
+
+The system TTS engines remain available. You can select one at any time.
+
+### Emacs integration
+
+#### Book data
 
 After a book is loaded, Calibre's parsed data is available in the
 buffer-local variables `eaf-ebook-viewer-book-metadata` and
-`eaf-ebook-viewer-book-manifest`. The current visible-page text is exposed through
-`eaf-ebook-viewer-document-text` and
+`eaf-ebook-viewer-book-manifest`.
+
+The current visible-page text is available in
+`eaf-ebook-viewer-document-text`. Text changes run
 `eaf-ebook-viewer-document-changed-hook`.
+
+#### Text highlights
 
 External integrations can use `eaf-ebook-viewer-set-text-highlights` to mark
 words without wrapping book text or changing Calibre's native annotations.
-Entries may be plain strings or include a `word` and a `style` containing
-`background`, `border`, and `opacity`. Native highlights are reported
-through `eaf-ebook-viewer-annotation-created-hook` and
-`eaf-ebook-viewer-annotation-removed-hook`, using their Calibre UUID.
-Changes to their plain-text notes run
-`eaf-ebook-viewer-annotation-updated-hook`; selecting one runs
-`eaf-ebook-viewer-annotation-clicked-hook`. Calibre selects an existing
-highlight with its native double-click gesture; ordinary clicks are left
-unchanged.
+An entry can be a plain string. It can also contain a `word` and a `style`.
+The `style` can contain `background`, `border`, and `opacity`.
+
+The hooks `eaf-ebook-viewer-annotation-created-hook` and
+`eaf-ebook-viewer-annotation-removed-hook` report native highlights. Each
+event contains the Calibre UUID.
+
+#### Native annotations
+
+Changes to plain-text notes run `eaf-ebook-viewer-annotation-updated-hook`.
+Selection of an annotation runs `eaf-ebook-viewer-annotation-clicked-hook`.
+
+Calibre selects an existing highlight with its native double-click gesture.
+An ordinary click does not select the highlight.
+
+#### Selection commands
+
 Clicking a word runs
 `eaf-ebook-viewer-word-clicked-hook` with its text context.
 `eaf-ebook-viewer-create-highlight` creates a native Calibre highlight from
