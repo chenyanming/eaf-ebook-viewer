@@ -516,11 +516,24 @@ class AppBuffer(Buffer):
         self._text_highlights = []
         self._input_focused = False
         self._key_event_widget = None
+        self._content_ready = False
+        self._pending_cfi = None
+        self._pending_cfi_generation = 0
+        self._pending_cfi_navigations = 0
+        self._pending_cfi_active = False
+        self._pending_cfi_add_to_history = False
         try:
             options = json.loads(arguments) if arguments else {}
         except (TypeError, ValueError):
             options = {}
         self._open_at = options.get("open_at")
+        if isinstance(self._open_at, str) and self._open_at.startswith("epubcfi("):
+            # Calibre performs the first navigation as part of load_ebook().
+            # Replay it once after the content document and pagination settle.
+            self._pending_cfi = self._open_at
+            self._pending_cfi_generation += 1
+            self._pending_cfi_navigations = 1
+            self._pending_cfi_active = True
 
         try:
             self._create_viewer(url)
@@ -608,6 +621,12 @@ class AppBuffer(Buffer):
         self._install_application_event_filter()
         viewer.windowTitleChanged.connect(self.change_title)
         viewer.web_view.loadFinished.connect(self._web_page_loaded)
+        viewer.web_view.show_loading_message.connect(
+            self._content_loading_changed
+        )
+        viewer.web_view.content_file_changed.connect(
+            self._content_file_changed
+        )
         viewer.web_view.highlights_changed.connect(
             self._highlights_changed
         )
@@ -635,15 +654,65 @@ class AppBuffer(Buffer):
         self.activate_context()
         viewer.load_ebook(book_path, open_at=self._open_at)
 
+    def _content_loading_changed(self, message):
+        """Track when Calibre starts replacing the visible content file."""
+        if message:
+            self._content_ready = False
+
+    def _content_file_changed(self, _name):
+        """Resume a queued CFI after Calibre finishes pagination."""
+        self._content_ready = True
+        if self._pending_cfi_active:
+            self._pending_cfi_active = False
+        self._schedule_pending_cfi()
+
+    def _schedule_pending_cfi(self):
+        if self._pending_cfi is None:
+            return
+        generation = self._pending_cfi_generation
+        QTimer.singleShot(
+            100,
+            lambda: self._drive_pending_cfi(generation),
+        )
+
+    def _drive_pending_cfi(self, generation):
+        if (
+            generation != self._pending_cfi_generation
+            or self._pending_cfi is None
+            or self._pending_cfi_active
+            or not self._content_ready
+        ):
+            return
+        if self._pending_cfi_navigations <= 0:
+            self._pending_cfi = None
+            return
+
+        location = self._pending_cfi
+        add_to_history = self._pending_cfi_add_to_history
+        self._pending_cfi_add_to_history = False
+        self._pending_cfi_navigations -= 1
+        self._pending_cfi_active = True
+        self._content_ready = False
+        self.activate_context()
+        self.viewer.goto_cfi(location, add_to_history=add_to_history)
+
     @PostGui()
     def open_at(self, location):
-        """Move an already-open viewer using a Calibre location."""
+        """Move an already-open viewer using a stable Calibre location."""
         if self.viewer is None or not location:
             return
+        self._pending_cfi_generation += 1
         if location.startswith("search:"):
+            self._pending_cfi = None
             self.viewer.show_search(location[len("search:"):], trigger=True)
         elif location.startswith("epubcfi("):
-            self.viewer.goto_cfi(location, add_to_history=True)
+            self._pending_cfi = location
+            # Run once after the EAF window switch settles, then once more
+            # after Calibre confirms that the target content was paginated.
+            self._pending_cfi_navigations = 2
+            self._pending_cfi_active = False
+            self._pending_cfi_add_to_history = True
+            self._schedule_pending_cfi()
 
     def _show_startup_error(self, error):
         message = "EAF Calibre E-book Viewer failed to start:\n\n{}".format(error)
