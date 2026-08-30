@@ -9,6 +9,7 @@ Buffer and gives every book an isolated WebEngine profile/content handler.
 from __future__ import annotations
 
 import base64
+from collections import defaultdict
 import hashlib
 import json
 import os
@@ -208,33 +209,35 @@ def _stage_book(path):
         _validate_zip_ebook(source, extension)
         return source
 
-    if platform.system() == "Darwin":
-        cache_root = os.path.expanduser("~/Library/Caches")
-    elif platform.system() == "Windows":
-        cache_root = os.environ.get(
-            "LOCALAPPDATA", os.path.expanduser("~/.cache")
-        )
-    else:
-        cache_root = os.environ.get(
-            "XDG_CACHE_HOME", os.path.expanduser("~/.cache")
-        )
+    cache_root = _ebook_cache_root()
+    cache_key = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    cache_dir = os.path.join(cache_root, "books", cache_key)
+    os.makedirs(cache_dir, exist_ok=True)
+    cached_path = os.path.join(cache_dir, os.path.basename(source))
+    metadata_path = os.path.join(cache_dir, "source.json")
     announced = False
     for attempt in range(3):
         # The first read can cause File Provider to materialize a placeholder,
-        # changing its metadata. Recompute the cache key and retry within this
-        # same open request instead of making the user open the book twice.
+        # changing its metadata. Recheck it and retry within this same open
+        # request instead of making the user open the book twice.
         source_stat = os.stat(source)
-        fingerprint = "\0".join(
+        source_metadata = {
+            "path": source,
+            "size": source_stat.st_size,
+            "mtime_ns": source_stat.st_mtime_ns,
+        }
+        legacy_fingerprint = "\0".join(
             (source, str(source_stat.st_size), str(source_stat.st_mtime_ns))
         ).encode("utf-8")
-        cache_key = hashlib.sha256(fingerprint).hexdigest()
-        cache_dir = os.path.join(
-            cache_root, "eaf-ebook-viewer", "books", cache_key
+        legacy_key = hashlib.sha256(legacy_fingerprint).hexdigest()
+        legacy_path = os.path.join(
+            cache_root, "books", legacy_key, os.path.basename(source)
         )
-        os.makedirs(cache_dir, exist_ok=True)
-        cached_path = os.path.join(cache_dir, os.path.basename(source))
 
-        if os.path.isfile(cached_path):
+        if (
+            _read_json_file(metadata_path) == source_metadata
+            and os.path.isfile(cached_path)
+        ):
             try:
                 _validate_staged_book(
                     cached_path, source_stat.st_size, extension
@@ -245,17 +248,31 @@ def _stage_book(path):
                 # A prior interrupted download left a bad cache entry.
                 pass
 
+        # Reuse the cache layout used before stable per-book directories were
+        # introduced.  This also avoids downloading a dataless File Provider
+        # item again during the migration.
+        copy_source = source
+        if os.path.isfile(legacy_path):
+            try:
+                _validate_staged_book(
+                    legacy_path, source_stat.st_size, extension
+                )
+                copy_source = legacy_path
+            except RuntimeError:
+                pass
+
         if not announced:
-            message_to_emacs(
-                "Downloading cloud e-book to the local EAF cache..."
-            )
+            if copy_source == source:
+                message_to_emacs(
+                    "Downloading cloud e-book to the local EAF cache..."
+                )
             announced = True
         descriptor, temporary_path = tempfile.mkstemp(
             prefix=cache_key + ".", suffix=".download", dir=cache_dir
         )
         os.close(descriptor)
         try:
-            _copy_cloud_file(source, temporary_path)
+            _copy_cloud_file(copy_source, temporary_path)
             final_stat = os.stat(source)
             changed = (
                 final_stat.st_size != source_stat.st_size
@@ -274,6 +291,7 @@ def _stage_book(path):
             )
             os.replace(temporary_path, cached_path)
             os.chmod(cached_path, 0o444)
+            _write_json_file(metadata_path, source_metadata)
             return cached_path
         finally:
             try:
@@ -282,6 +300,136 @@ def _stage_book(path):
                 pass
 
     raise RuntimeError("Could not cache the cloud e-book: {}".format(source))
+
+
+def _ebook_cache_root():
+    if platform.system() == "Darwin":
+        cache_root = os.path.expanduser("~/Library/Caches")
+    elif platform.system() == "Windows":
+        cache_root = os.environ.get(
+            "LOCALAPPDATA", os.path.expanduser("~/.cache")
+        )
+    else:
+        cache_root = os.environ.get(
+            "XDG_CACHE_HOME", os.path.expanduser("~/.cache")
+        )
+    return os.path.join(cache_root, "eaf-ebook-viewer")
+
+
+def _read_json_file(path, default=None):
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            return json.load(stream)
+    except (OSError, ValueError, TypeError):
+        return default
+
+
+def _write_json_file(path, value):
+    directory = os.path.dirname(path)
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=".metadata.", suffix=".tmp", dir=directory
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _migrate_cached_annotations(book_path, viewer_ui):
+    """Merge annotations tied to obsolete cache paths into the stable path."""
+    cache_books = os.path.join(_ebook_cache_root(), "books")
+    stable_dir = os.path.dirname(book_path)
+    if os.path.dirname(stable_dir) != cache_books:
+        return
+
+    from calibre.db.annotations import (
+        annotations_as_copied_list,
+        merge_annotations,
+    )
+    from calibre.gui2.viewer.annotations import (
+        annotations_dir,
+        annot_list_as_bytes,
+        parse_annotations,
+    )
+
+    migration_path = os.path.join(stable_dir, "annotations-migrated.json")
+    migrated = set(_read_json_file(migration_path, []))
+    destination_key = viewer_ui.path_key(book_path) + ".json"
+    destination = os.path.join(annotations_dir, destination_key)
+    book_name = os.path.basename(book_path)
+    book_size = os.path.getsize(book_path)
+    book_digest = _file_sha256(book_path)
+    candidates = []
+
+    try:
+        cache_directories = os.scandir(cache_books)
+    except OSError:
+        return
+    with cache_directories:
+        for entry in cache_directories:
+            candidate = os.path.join(entry.path, book_name)
+            if candidate == book_path or not entry.is_dir():
+                continue
+            try:
+                if (
+                    os.path.getsize(candidate) != book_size
+                    or _file_sha256(candidate) != book_digest
+                ):
+                    continue
+            except OSError:
+                continue
+            key = viewer_ui.path_key(candidate) + ".json"
+            sidecar = os.path.join(annotations_dir, key)
+            if key not in migrated and os.path.isfile(sidecar):
+                candidates.append((key, sidecar))
+
+    if not candidates:
+        return
+
+    annotations_map = defaultdict(list)
+    if os.path.isfile(destination):
+        with open(destination, "rb") as stream:
+            merge_annotations(parse_annotations(stream.read()), annotations_map)
+    for _key, sidecar in candidates:
+        with open(sidecar, "rb") as stream:
+            merge_annotations(parse_annotations(stream.read()), annotations_map)
+
+    serialized = annot_list_as_bytes(
+        annotations_as_copied_list(annotations_map)
+    )
+    os.makedirs(annotations_dir, exist_ok=True)
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=".annotations.", suffix=".tmp", dir=annotations_dir
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(serialized)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, destination)
+    finally:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+
+    migrated.update(key for key, _sidecar in candidates)
+    _write_json_file(migration_path, sorted(migrated))
 
 
 def _install_isolated_profile_factory(web_view_module):
@@ -557,6 +705,8 @@ class AppBuffer(Buffer):
         import calibre.gui2.viewer.web_view as web_view_module
         from calibre.utils.webengine import setup_default_profile
         from qt.core import Qt
+
+        _migrate_cached_annotations(book_path, viewer_ui)
 
         if not getattr(app, "_eaf_calibre_profile_ready", False):
             setup_default_profile()
